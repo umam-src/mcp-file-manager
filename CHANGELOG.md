@@ -5,6 +5,9 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+### Added
+- CI `tests.yml` (GitHub Actions) — jalankan `pytest` otomatis di setiap push/PR pada Python 3.10–3.12.
+
 ## [0.2.0] - 2026-08-07
 
 ### Fixed
