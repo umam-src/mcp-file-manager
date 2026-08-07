@@ -2,133 +2,317 @@
 """MCP server untuk mengelola file lokal di server Hermes.
 
 Tools:
-  - list_files(path)        -> daftar isi direktori
-  - read_file(path, limit)  -> baca isi file (text)
-  - write_file(path, content) -> tulis/overwrite file
-  - append_file(path, content) -> tambah isi di akhir file
-  - edit_file(path, old, new) -> ganti teks dalam file
-  - delete_file(path)       -> hapus file
-  - mkdir(path)             -> buat direktori
+  - list_files(path, recursive, pattern) -> daftar isi direktori
+  - read_file(path, limit)               -> baca isi file (text)
+  - write_file(path, content)            -> tulis/overwrite file
+  - append_file(path, content)           -> tambah isi di akhir file
+  - edit_file(path, old, new, count)     -> ganti teks dalam file
+  - delete_file(path)                    -> hapus file
+  - delete_dir(path, recursive)          -> hapus direktori
+  - move_file(src, dst, overwrite)       -> pindah/ganti nama file atau direktori
+  - mkdir(path)                          -> buat direktori
 
 Semua akses dibatasi ke BASE_DIR (default /root) untuk keamanan.
+Path di-resolve dengan pathlib (menangani symlink & separator Windows/Linux)
+sebelum divalidasi berada di dalam BASE_DIR.
 
 Jalankan:
   python3 server.py   (stdio MCP)
 """
+from __future__ import annotations
+
+import logging
 import os
+import shutil
 import sys
-from mcp.server import MCPServer
+from pathlib import Path
 
-BASE_DIR = os.environ.get("MCP_FILE_BASE", "/root")
+try:
+    from dotenv import load_dotenv
 
-mcp = MCPServer(name="mcp-file-manager", version="0.1.0")
+    load_dotenv()
+except ImportError:
+    # python-dotenv opsional; jika tidak terpasang, lanjut pakai env yang ada.
+    pass
+
+from mcp.server.fastmcp import FastMCP
+
+# --------------------------------------------------------------------------
+# Setup
+# --------------------------------------------------------------------------
+
+# PENTING: MCP stdio memakai stdout untuk protokol JSON-RPC.
+# Semua log HARUS ke stderr, jangan pernah print() ke stdout.
+logging.basicConfig(
+    level=os.environ.get("MCP_FILE_LOG_LEVEL", "INFO"),
+    stream=sys.stderr,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("mcp-file-manager")
+
+BASE_DIR = Path(os.environ.get("MCP_FILE_BASE", "/root")).resolve()
+
+mcp = FastMCP("mcp-file-manager")
 
 
-def _safe(path: str) -> str:
-    """Resolve path dalam BASE_DIR, tolak traversal keluar."""
-    full = os.path.normpath(os.path.join(BASE_DIR, path))
-    if not (full == BASE_DIR or full.startswith(BASE_DIR + os.sep)):
-        raise ValueError(f"Akses ditolak: {path} di luar {BASE_DIR}")
-    return full
+class PathError(ValueError):
+    """Error validasi atau akses path di luar BASE_DIR."""
 
+
+# --------------------------------------------------------------------------
+# Helper
+# --------------------------------------------------------------------------
+
+def _validate_raw(path: str) -> None:
+    if not path:
+        raise PathError("path tidak boleh kosong")
+    if "\x00" in path:
+        raise PathError("path mengandung null byte")
+
+
+def _safe(path: str) -> Path:
+    """Resolve path relatif terhadap BASE_DIR, tolak akses di luar BASE_DIR.
+
+    Menggunakan Path.resolve() sehingga:
+      - separator Windows (\\) dan Linux (/) sama-sama ditangani dengan benar,
+      - traversal via '..' diselesaikan sebelum dicek,
+      - symlink yang mengarah keluar BASE_DIR ikut tertangkap.
+    """
+    _validate_raw(path)
+    candidate = (BASE_DIR / path).resolve()
+    try:
+        candidate.relative_to(BASE_DIR)
+    except ValueError:
+        raise PathError(f"Akses ditolak: '{path}' berada di luar {BASE_DIR}")
+    return candidate
+
+
+def _entry_info(fp: Path, name: str) -> dict:
+    return {
+        "name": name,
+        "type": "dir" if fp.is_dir() else "file",
+        "size": fp.stat().st_size if fp.is_file() else 0,
+    }
+
+
+# --------------------------------------------------------------------------
+# Tools
+# --------------------------------------------------------------------------
 
 @mcp.tool()
-def list_files(path: str = ".") -> dict:
-    """Daftar isi direktori (file & folder)."""
+def list_files(path: str = ".", recursive: bool = False, pattern: str = "*") -> dict:
+    """Daftar isi direktori (file & folder).
+
+    Args:
+        path: path relatif terhadap BASE_DIR.
+        recursive: jika True, telusuri seluruh subdirektori juga.
+        pattern: glob pattern untuk memfilter nama (mis. '*.py', '*.txt').
+    """
     try:
         full = _safe(path)
+        if not full.exists():
+            return {"error": f"Path tidak ditemukan: {path}"}
+        if not full.is_dir():
+            return {"error": f"Path bukan direktori: {path}"}
+
+        iterator = full.rglob(pattern) if recursive else full.glob(pattern)
         entries = []
-        for name in sorted(os.listdir(full)):
-            fp = os.path.join(full, name)
-            entries.append({
-                "name": name,
-                "type": "dir" if os.path.isdir(fp) else "file",
-                "size": os.path.getsize(fp) if os.path.isfile(fp) else 0,
-            })
-        return {"path": path, "entries": entries, "count": len(entries)}
+        for fp in sorted(iterator):
+            name = str(fp.relative_to(full)) if recursive else fp.name
+            entries.append(_entry_info(fp, name))
+
+        return {
+            "path": path,
+            "entries": entries,
+            "count": len(entries),
+            "recursive": recursive,
+            "pattern": pattern,
+        }
+    except PathError as e:
+        return {"error": str(e)}
     except Exception as e:
+        logger.exception("list_files gagal")
         return {"error": str(e)}
 
 
 @mcp.tool()
 def read_file(path: str, limit: int = 2000) -> dict:
-    """Baca isi file teks (maks limit baris)."""
+    """Baca isi file teks (maks `limit` baris)."""
     try:
+        if limit <= 0:
+            return {"error": "limit harus lebih besar dari 0"}
         full = _safe(path)
-        with open(full, "r", encoding="utf-8", errors="replace") as f:
+        if not full.exists():
+            return {"error": f"File tidak ditemukan: {path}"}
+        if full.is_dir():
+            return {"error": f"Path adalah direktori, bukan file: {path}"}
+        with full.open("r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
-        return {"path": path, "lines": lines[:limit], "total_lines": len(lines), "truncated": len(lines) > limit}
+        return {
+            "path": path,
+            "lines": lines[:limit],
+            "total_lines": len(lines),
+            "truncated": len(lines) > limit,
+        }
+    except PathError as e:
+        return {"error": str(e)}
     except Exception as e:
+        logger.exception("read_file gagal")
         return {"error": str(e)}
 
 
 @mcp.tool()
 def write_file(path: str, content: str) -> dict:
-    """Tulis/overwrite isi file sepenuhnya."""
+    """Tulis/overwrite isi file sepenuhnya (membuat direktori induk bila perlu)."""
     try:
         full = _safe(path)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        with open(full, "w", encoding="utf-8") as f:
-            f.write(content)
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content, encoding="utf-8")
         return {"path": path, "written": len(content), "ok": True}
+    except PathError as e:
+        return {"error": str(e)}
     except Exception as e:
+        logger.exception("write_file gagal")
         return {"error": str(e)}
 
 
 @mcp.tool()
 def append_file(path: str, content: str) -> dict:
-    """Tambah isi di akhir file."""
+    """Tambah isi di akhir file (membuat file/direktori induk bila belum ada)."""
     try:
         full = _safe(path)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        with open(full, "a", encoding="utf-8") as f:
+        full.parent.mkdir(parents=True, exist_ok=True)
+        with full.open("a", encoding="utf-8") as f:
             f.write(content)
         return {"path": path, "appended": len(content), "ok": True}
+    except PathError as e:
+        return {"error": str(e)}
     except Exception as e:
+        logger.exception("append_file gagal")
         return {"error": str(e)}
 
 
 @mcp.tool()
-def edit_file(path: str, old_string: str, new_string: str) -> dict:
-    """Ganti semua kemunculan old_string -> new_string dalam file."""
+def edit_file(path: str, old_string: str, new_string: str, count: int = -1) -> dict:
+    """Ganti kemunculan old_string -> new_string dalam file.
+
+    Args:
+        count: jumlah maksimum penggantian. -1 (default) berarti semua kemunculan.
+    """
     try:
         full = _safe(path)
-        with open(full, "r", encoding="utf-8") as f:
-            text = f.read()
+        if not full.exists():
+            return {"error": f"File tidak ditemukan: {path}"}
+        text = full.read_text(encoding="utf-8")
         if old_string not in text:
             return {"path": path, "ok": False, "error": "old_string tidak ditemukan"}
-        count = text.count(old_string)
-        text = text.replace(old_string, new_string)
-        with open(full, "w", encoding="utf-8") as f:
-            f.write(text)
-        return {"path": path, "replacements": count, "ok": True}
+        available = text.count(old_string)
+        replacements = available if count < 0 else min(count, available)
+        text = text.replace(old_string, new_string, replacements)
+        full.write_text(text, encoding="utf-8")
+        return {"path": path, "replacements": replacements, "ok": True}
+    except PathError as e:
+        return {"error": str(e)}
     except Exception as e:
+        logger.exception("edit_file gagal")
         return {"error": str(e)}
 
 
 @mcp.tool()
 def delete_file(path: str) -> dict:
-    """Hapus file (bukan direktori)."""
+    """Hapus file (bukan direktori — gunakan delete_dir untuk itu)."""
     try:
         full = _safe(path)
-        if os.path.isdir(full):
-            return {"error": "path adalah direktori, gunakan delete via os tidak didukung"}
-        os.remove(full)
+        if not full.exists():
+            return {"error": f"File tidak ditemukan: {path}"}
+        if full.is_dir():
+            return {"error": "path adalah direktori, gunakan tool delete_dir"}
+        full.unlink()
         return {"path": path, "deleted": True}
+    except PathError as e:
+        return {"error": str(e)}
     except Exception as e:
+        logger.exception("delete_file gagal")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def delete_dir(path: str, recursive: bool = False) -> dict:
+    """Hapus direktori.
+
+    Args:
+        recursive: jika False (default), hanya berhasil bila direktori kosong.
+                   Jika True, hapus direktori beserta seluruh isinya.
+    """
+    try:
+        full = _safe(path)
+        if full == BASE_DIR:
+            return {"error": "tidak boleh menghapus BASE_DIR itu sendiri"}
+        if not full.exists():
+            return {"error": f"Direktori tidak ditemukan: {path}"}
+        if not full.is_dir():
+            return {"error": "path bukan direktori, gunakan tool delete_file"}
+        if recursive:
+            shutil.rmtree(full)
+        else:
+            full.rmdir()  # gagal otomatis jika direktori tidak kosong
+        return {"path": path, "deleted": True, "recursive": recursive}
+    except OSError as e:
+        return {"error": f"Direktori tidak kosong atau gagal dihapus: {e}"}
+    except PathError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        logger.exception("delete_dir gagal")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def move_file(src: str, dst: str, overwrite: bool = False) -> dict:
+    """Pindah atau ganti nama file/direktori dari src ke dst.
+
+    Args:
+        overwrite: jika True, timpa dst jika sudah ada.
+    """
+    try:
+        full_src = _safe(src)
+        full_dst = _safe(dst)
+        if not full_src.exists():
+            return {"error": f"Sumber tidak ditemukan: {src}"}
+        if full_dst.exists():
+            if not overwrite:
+                return {"error": f"Tujuan sudah ada: {dst} (gunakan overwrite=True untuk menimpa)"}
+            if full_dst.is_dir():
+                shutil.rmtree(full_dst)
+            else:
+                full_dst.unlink()
+        full_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(full_src), str(full_dst))
+        return {"src": src, "dst": dst, "moved": True}
+    except PathError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        logger.exception("move_file gagal")
         return {"error": str(e)}
 
 
 @mcp.tool()
 def mkdir(path: str) -> dict:
-    """Buat direktori (rekursif)."""
+    """Buat direktori (rekursif, tidak error jika sudah ada)."""
     try:
         full = _safe(path)
-        os.makedirs(full, exist_ok=True)
+        full.mkdir(parents=True, exist_ok=True)
         return {"path": path, "created": True}
+    except PathError as e:
+        return {"error": str(e)}
     except Exception as e:
+        logger.exception("mkdir gagal")
         return {"error": str(e)}
 
 
-if __name__ == "__main__":
+def main() -> None:
+    logger.info("mcp-file-manager start, BASE_DIR=%s", BASE_DIR)
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
