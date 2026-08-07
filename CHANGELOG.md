@@ -1,8 +1,11 @@
 # Changelog
 
 Semua perubahan penting dicatat di file ini.
+Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikuti [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-08-07
 
 ### Fixed
 - Import `from mcp.server import MCPServer` diganti menjadi `from mcp.server.fastmcp import FastMCP`
