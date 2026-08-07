@@ -1,6 +1,6 @@
 # mcp-file-manager
 
-MCP server untuk mengelola file lokal (list/read/write/edit/move/delete) di server Hermes.
+MCP server untuk mengelola file lokal (list/read/write/edit/move/delete).
 
 ## Tools
 - `list_files(path=".", recursive=False, pattern="*")` — daftar isi direktori, opsional rekursif & filter glob
