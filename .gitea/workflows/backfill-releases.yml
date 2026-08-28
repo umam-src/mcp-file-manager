@@ -1,0 +1,88 @@
+name: Backfill Gitea Releases
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Periksa dan buat release yang belum ada
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          api="${{ github.api_url }}/repos/${{ github.repository }}"
+          versions_file=$(mktemp)
+          notes_file=$(mktemp)
+          response_file=$(mktemp)
+          trap 'rm -f "$versions_file" "$notes_file" "$response_file"' EXIT
+
+          grep -E '^## \[[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\]' CHANGELOG.md \
+            | sed -E 's/^## \[//; s/\].*$//' > "$versions_file" || true
+
+          if [ ! -s "$versions_file" ]; then
+            echo "::error::Tidak menemukan heading versi di CHANGELOG.md"
+            exit 1
+          fi
+
+          while IFS= read -r version; do
+            tag="v${version}"
+            status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+              -H "Authorization: token ${GITEA_TOKEN}" \
+              "${api}/releases/tags/${tag}")
+
+            if [ "$status" = "200" ]; then
+              echo "Release $tag sudah ada, dilewati."
+              continue
+            fi
+
+            if [ "$status" != "404" ]; then
+              cat "$response_file"
+              echo "::error::Gagal memeriksa release $tag, HTTP $status"
+              exit 1
+            fi
+
+            awk -v ver="$version" '
+              BEGIN { found = 0 }
+              /^## \[/ {
+                if (found == 1) exit
+                if ($0 ~ ("\\[" ver "\\]")) { found = 1; next }
+                next
+              }
+              /^\[[^]]+\]:/ { if (found == 1) exit }
+              found == 1 { print }
+            ' CHANGELOG.md > "$notes_file"
+
+            sed -i -e '/./,$!d' "$notes_file"
+            tac "$notes_file" | sed -e '/./,$!d' | tac > "${notes_file}.trimmed"
+            mv "${notes_file}.trimmed" "$notes_file"
+
+            body=$(jq -Rs . < "$notes_file")
+            payload=$(jq -n \
+              --arg tag "$tag" \
+              --arg body "$body" \
+              --arg target "${{ github.sha }}" \
+              '{tag_name: $tag, name: $tag, body: ($body | fromjson), target_commitish: $target, draft: false, prerelease: false}')
+
+            echo "Release $tag belum ada, membuat release..."
+            create_status=$(curl -sS -o "$response_file" -w '%{http_code}' -X POST \
+              -H "Authorization: token ${GITEA_TOKEN}" \
+              -H 'Content-Type: application/json' \
+              "${api}/releases" \
+              -d "$payload")
+
+            cat "$response_file"
+            if [ "$create_status" -ge 300 ]; then
+              echo "::error::Gagal membuat release $tag, HTTP $create_status"
+              exit 1
+            fi
+          done < "$versions_file"

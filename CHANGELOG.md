@@ -5,6 +5,14 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+### Fixed
+- `list_files(recursive=True)` bisa menghasilkan output yang melebihi batas ukuran
+  hasil tool ketika direktori target berisi `.git`, `.venv`, `node_modules`, dll.
+  (ribuan/puluhan ribu file), membuat tool gagal total tanpa hasil apa pun.
+  Sekarang direktori berat tersebut otomatis dilewati (`DEFAULT_EXCLUDE_DIRS`) dan
+  hasil dibatasi maks 1000 entri (`MAX_RECURSIVE_ENTRIES`), dengan field baru
+  `excluded_dirs` dan `truncated` pada hasil.
+
 ### Added
 - CI `tests.yml` (GitHub Actions) — jalankan `pytest` otomatis di setiap push/PR pada Python 3.10–3.12.
 

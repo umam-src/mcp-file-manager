@@ -99,13 +99,34 @@ def _entry_info(fp: Path, name: str) -> dict:
 # Tools
 # --------------------------------------------------------------------------
 
+# Direktori besar/tidak relevan yang otomatis dilewati saat recursive=True,
+# supaya hasil list_files tidak meledak ukurannya (mis. .git punya ribuan
+# object file, .venv/node_modules bisa berisi puluhan ribu file paket).
+DEFAULT_EXCLUDE_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__",
+    ".egg-info", "dist", "build", ".mypy_cache", ".pytest_cache",
+}
+
+# Batas jumlah entri yang dikembalikan untuk recursive=True, agar tidak
+# melebihi batas ukuran hasil tool meski exclude di atas tidak cukup.
+MAX_RECURSIVE_ENTRIES = 1000
+
+
+def _is_excluded(fp: Path, root: Path) -> bool:
+    return any(part in DEFAULT_EXCLUDE_DIRS or part.endswith(".egg-info")
+               for part in fp.relative_to(root).parts[:-1])
+
+
 @mcp.tool()
 def list_files(path: str = ".", recursive: bool = False, pattern: str = "*") -> dict:
     """Daftar isi direktori (file & folder).
 
     Args:
         path: path relatif terhadap BASE_DIR.
-        recursive: jika True, telusuri seluruh subdirektori juga.
+        recursive: jika True, telusuri seluruh subdirektori juga. Direktori
+            besar/tidak relevan (.git, .venv, node_modules, __pycache__, dll.)
+            otomatis dilewati, dan hasil dibatasi maks MAX_RECURSIVE_ENTRIES
+            entri (ditandai lewat field 'truncated').
         pattern: glob pattern untuk memfilter nama (mis. '*.py', '*.txt').
     """
     try:
@@ -117,17 +138,27 @@ def list_files(path: str = ".", recursive: bool = False, pattern: str = "*") -> 
 
         iterator = full.rglob(pattern) if recursive else full.glob(pattern)
         entries = []
+        truncated = False
         for fp in sorted(iterator):
+            if recursive and _is_excluded(fp, full):
+                continue
+            if recursive and len(entries) >= MAX_RECURSIVE_ENTRIES:
+                truncated = True
+                break
             name = str(fp.relative_to(full)) if recursive else fp.name
             entries.append(_entry_info(fp, name))
 
-        return {
+        result = {
             "path": path,
             "entries": entries,
             "count": len(entries),
             "recursive": recursive,
             "pattern": pattern,
         }
+        if recursive:
+            result["excluded_dirs"] = sorted(DEFAULT_EXCLUDE_DIRS)
+            result["truncated"] = truncated
+        return result
     except PathError as e:
         return {"error": str(e)}
     except Exception as e:

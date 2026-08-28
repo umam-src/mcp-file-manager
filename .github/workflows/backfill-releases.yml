@@ -1,0 +1,67 @@
+name: Backfill GitHub Releases
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check and create missing releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          versions_file=$(mktemp)
+          notes_file=$(mktemp)
+          trap 'rm -f "$versions_file" "$notes_file"' EXIT
+
+          grep -E '^## \[[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\]' CHANGELOG.md \
+            | sed -E 's/^## \[//; s/\].*$//' > "$versions_file" || true
+
+          if [ ! -s "$versions_file" ]; then
+            echo "::error::Tidak menemukan heading versi di CHANGELOG.md"
+            exit 1
+          fi
+
+          while IFS= read -r version; do
+            tag="v${version}"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Release $tag sudah ada, dilewati."
+              continue
+            fi
+
+            awk -v ver="$version" '
+              BEGIN { found = 0 }
+              /^## \[/ {
+                if (found == 1) exit
+                if ($0 ~ ("\\[" ver "\\]")) { found = 1; next }
+                next
+              }
+              /^\[[^]]+\]:/ { if (found == 1) exit }
+              found == 1 { print }
+            ' CHANGELOG.md > "$notes_file"
+
+            sed -i -e '/./,$!d' "$notes_file"
+            tac "$notes_file" | sed -e '/./,$!d' | tac > "${notes_file}.trimmed"
+            mv "${notes_file}.trimmed" "$notes_file"
+
+            echo "Release $tag belum ada, membuat release..."
+            gh release create "$tag" \
+              --title "$tag" \
+              --notes-file "$notes_file" \
+              --target "$GITHUB_SHA" \
+              --latest=false
+          done < "$versions_file"

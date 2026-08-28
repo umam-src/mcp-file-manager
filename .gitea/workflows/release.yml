@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION=$(grep -m1 -oP '(?<=^## \[)[0-9]+\.[0-9]+\.[0-9]+(?=\])' CHANGELOG.md || true)
+          VERSION=$(grep -m1 -oP '(?<=^## \[)[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(?=\])' CHANGELOG.md || true)
           if [ -z "$VERSION" ]; then
             echo "::error::Tidak menemukan heading versi (## [x.y.z]) di CHANGELOG.md"
             exit 1

@@ -67,6 +67,31 @@ def test_list_files_recursive_and_pattern(srv):
     assert not any(n.endswith("b.txt") for n in names)
 
 
+def test_list_files_recursive_excludes_heavy_dirs(srv):
+    srv.mkdir(".git")
+    srv.write_file(".git/config", "junk")
+    srv.mkdir(".venv/lib")
+    srv.write_file(".venv/lib/pkg.py", "junk")
+    srv.write_file("real.py", "print('ok')")
+
+    result = srv.list_files(".", recursive=True, pattern="*")
+    names = [e["name"] for e in result["entries"]]
+    assert "real.py" in names
+    assert not any(n.startswith(".git") for n in names)
+    assert not any(n.startswith(".venv") for n in names)
+    assert result["truncated"] is False
+
+
+def test_list_files_recursive_caps_entry_count(srv, monkeypatch):
+    monkeypatch.setattr(srv, "MAX_RECURSIVE_ENTRIES", 3)
+    for i in range(6):
+        srv.write_file(f"f{i}.txt", "x")
+
+    result = srv.list_files(".", recursive=True, pattern="*")
+    assert result["count"] == 3
+    assert result["truncated"] is True
+
+
 def test_move_file(srv):
     srv.write_file("old.txt", "isi")
     result = srv.move_file("old.txt", "new.txt")

@@ -1,0 +1,120 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - CHANGELOG.md
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/adit-server
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Extract version and release notes
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION=$(grep -m1 -E '^## \[[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\]' CHANGELOG.md \
+            | sed -E 's/^## \[//; s/\].*$//') || true
+
+          if [ -z "$VERSION" ]; then
+            echo "::error::Tidak menemukan heading versi (## [x.y.z]) di CHANGELOG.md"
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          awk -v ver="$VERSION" '
+            BEGIN { found = 0 }
+            /^## \[/ {
+              if (found == 1) exit
+              if ($0 ~ ("\\[" ver "\\]")) { found = 1; next }
+              next
+            }
+            /^\[[^]]+\]:/ { if (found == 1) exit }
+            found == 1 { print }
+          ' CHANGELOG.md > release_notes.md
+
+          sed -i -e '/./,$!d' release_notes.md
+          tac release_notes.md | sed -e '/./,$!d' | tac > release_notes.tmp && mv release_notes.tmp release_notes.md
+
+          echo "----- release_notes.md -----"
+          cat release_notes.md
+
+      - name: Check whether GitHub Release already exists
+        id: releasecheck
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.changelog.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag and GitHub Release
+        if: steps.releasecheck.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.changelog.outputs.tag }}
+          name: "${{ steps.changelog.outputs.tag }}"
+          body_path: release_notes.md
+          target_commitish: ${{ github.sha }}
+
+      - name: Report existing release
+        if: steps.releasecheck.outputs.exists == 'true'
+        run: echo "GitHub Release ${{ steps.changelog.outputs.tag }} sudah ada, dilewati."
+
+      - name: Log in to Docker Hub
+        if: steps.releasecheck.outputs.exists == 'false'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker tag list
+        id: docker-tags
+        if: steps.releasecheck.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.changelog.outputs.version }}"
+
+          TAGS="${{ env.IMAGE_NAME }}:${VERSION}"
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            TAGS="${TAGS},${{ env.IMAGE_NAME }}:${VERSION%.*}"
+          fi
+          TAGS="${TAGS},${{ env.IMAGE_NAME }}:latest"
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Docker tags: ${TAGS}"
+
+      - name: Build and push image
+        if: steps.releasecheck.outputs.exists == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.docker-tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.changelog.outputs.version }}
