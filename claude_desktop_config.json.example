@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "file-manager": {
-      "command": "C:\\Users\\<user>\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\python.exe",
-      "args": ["C:\\Users\\<user>\\Documents\\Git\\gitea\\mcp-file-manager\\server.py"],
+      "command": "C:/Users/<user>/path/to/mcp-file-manager/.venv/Scripts/python.exe",
+      "args": ["C:/Users/<user>/path/to/mcp-file-manager/server.py"],
       "env": {
-        "MCP_FILE_BASE": "C:\\Users\\<user>\\Documents\\Git\\gitea"
+        "MCP_FILE_BASE": "C:/Users/<user>/path/to/folder-yang-boleh-diakses"
       }
     }
   }

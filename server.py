@@ -3,10 +3,10 @@
 
 Tools:
   - list_files(path, recursive, pattern) -> daftar isi direktori
-  - read_file(path, limit)               -> baca isi file (text)
+  - read_file(path, limit, offset)       -> baca isi file (text) per baris
   - write_file(path, content)            -> tulis/overwrite file
   - append_file(path, content)           -> tambah isi di akhir file
-  - edit_file(path, old, new, count)     -> ganti teks dalam file
+  - edit_file(path, old_string, new_string, count) -> ganti teks dalam file
   - delete_file(path)                    -> hapus file
   - delete_dir(path, recursive)          -> hapus direktori
   - move_file(src, dst, overwrite)       -> pindah/ganti nama file atau direktori
@@ -18,6 +18,11 @@ sebelum divalidasi berada di dalam BASE_DIR.
 
 Jalankan:
   python3 server.py   (stdio MCP)
+
+Environment variable:
+  MCP_FILE_BASE            direktori dasar yang boleh diakses (default /root)
+  MCP_FILE_MAX_WRITE_BYTES batas ukuran tulis per operasi (default 5 MiB)
+  MCP_FILE_LOG_LEVEL       level log ke stderr (default INFO)
 """
 from __future__ import annotations
 
@@ -36,6 +41,7 @@ except ImportError:
     pass
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 # --------------------------------------------------------------------------
 # Setup
@@ -52,7 +58,53 @@ logger = logging.getLogger("mcp-file-manager")
 
 BASE_DIR = Path(os.environ.get("MCP_FILE_BASE", "/root")).resolve()
 
-mcp = FastMCP("mcp-file-manager")
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        logger.warning("%s tidak valid, memakai default %s", name, default)
+        return default
+
+
+# Batas karakter isi yang dikembalikan read_file per panggilan, agar hasil
+# tool tidak melebihi batas ukuran di client.
+MAX_READ_CHARS = 100_000
+
+# Batas ukuran (byte) untuk satu operasi write_file/append_file/edit_file,
+# agar tidak menulis file raksasa tanpa sengaja.
+MAX_WRITE_BYTES = _env_int("MCP_FILE_MAX_WRITE_BYTES", 5 * 1024 * 1024)
+
+# Petunjuk untuk model, dikirim client saat inisialisasi (Claude Desktop
+# memasukkannya ke konteks), supaya model tahu batas akses dan cara pakai.
+INSTRUCTIONS = (
+    f"Server file manager lokal. Semua path relatif terhadap BASE_DIR = {BASE_DIR}. "
+    "Path absolut di dalam BASE_DIR juga diterima; path di luarnya ditolak. "
+    "Untuk melihat struktur pakai list_files(recursive=True); direktori berat "
+    "(.git, .venv, node_modules, dll.) dilewati otomatis. "
+    "Untuk file besar pakai read_file dengan limit dan offset (lanjutkan dari "
+    "next_offset). Pakai edit_file untuk perubahan kecil; write_file hanya untuk "
+    "file baru atau tulis ulang penuh. Line ending file yang sudah ada (CRLF/LF) "
+    "dipertahankan. Hapus, timpa, dan pindah tidak bisa dibatalkan."
+)
+
+mcp = FastMCP("mcp-file-manager", instructions=INSTRUCTIONS)
+
+
+def _ann(title: str, *, read_only: bool = False, destructive: bool = False,
+         idempotent: bool = False) -> ToolAnnotations:
+    """Annotations tool agar client (mis. Claude Desktop) tahu mana yang aman.
+
+    Tool read-only bisa diizinkan tanpa konfirmasi ketat; tool destruktif
+    (timpa/hapus/pindah) ditandai supaya client meminta persetujuan pengguna.
+    """
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=read_only,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=False,
+    )
 
 
 class PathError(ValueError):
@@ -95,6 +147,48 @@ def _entry_info(fp: Path, name: str) -> dict:
     }
 
 
+def _detect_eol(full: Path) -> str:
+    """Line ending file yang sudah ada: CRLF bila mayoritas CRLF, selain itu LF.
+
+    File yang belum ada (atau tanpa baris baru) dianggap LF.
+    """
+    if not full.is_file():
+        return "\n"
+    with full.open("rb") as f:
+        head = f.read(65536)
+    crlf = head.count(b"\r\n")
+    lf = head.count(b"\n") - crlf
+    return "\r\n" if crlf > lf else "\n"
+
+
+def _convert_eol(text: str, eol: str) -> str:
+    """Ubah '\\n' pada text menjadi CRLF bila file tujuan memakai CRLF.
+
+    Text yang sudah memuat '\\r' dibiarkan apa adanya (pemanggil mengatur sendiri).
+    """
+    if eol == "\r\n" and "\r" not in text:
+        return text.replace("\n", "\r\n")
+    return text
+
+
+def _eol_name(newlines) -> str | None:
+    """Terjemahkan TextIOWrapper.newlines menjadi nama line ending."""
+    if newlines is None:
+        return None
+    if isinstance(newlines, tuple):
+        return "mixed"
+    return {"\n": "LF", "\r\n": "CRLF", "\r": "CR"}.get(newlines)
+
+
+def _size_error(data: str, existing: int = 0) -> str | None:
+    """Pesan error bila ukuran hasil tulis melebihi MAX_WRITE_BYTES, else None."""
+    size = existing + len(data.encode("utf-8"))
+    if size > MAX_WRITE_BYTES:
+        return (f"Ukuran tulis {size} byte melebihi batas {MAX_WRITE_BYTES} byte "
+                "(atur MCP_FILE_MAX_WRITE_BYTES bila memang perlu)")
+    return None
+
+
 # --------------------------------------------------------------------------
 # Tools
 # --------------------------------------------------------------------------
@@ -113,22 +207,16 @@ MAX_RECURSIVE_ENTRIES = 1000
 
 
 def _is_excluded(fp: Path, root: Path) -> bool:
+    """True bila fp berada di dalam direktori berat, atau fp sendiri direktori berat."""
+    parts = fp.relative_to(root).parts
+    dir_parts = parts if fp.is_dir() else parts[:-1]
     return any(part in DEFAULT_EXCLUDE_DIRS or part.endswith(".egg-info")
-               for part in fp.relative_to(root).parts[:-1])
+               for part in dir_parts)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Daftar file", read_only=True, idempotent=True))
 def list_files(path: str = ".", recursive: bool = False, pattern: str = "*") -> dict:
-    """Daftar isi direktori (file & folder).
-
-    Args:
-        path: path relatif terhadap BASE_DIR.
-        recursive: jika True, telusuri seluruh subdirektori juga. Direktori
-            besar/tidak relevan (.git, .venv, node_modules, __pycache__, dll.)
-            otomatis dilewati, dan hasil dibatasi maks MAX_RECURSIVE_ENTRIES
-            entri (ditandai lewat field 'truncated').
-        pattern: glob pattern untuk memfilter nama (mis. '*.py', '*.txt').
-    """
+    """Daftar isi folder. recursive=true menelusuri subfolder, melewati folder berat (.git, .venv, node_modules, dll.) dan membatasi entri ('truncated'); pattern memfilter nama (mis. *.py)."""
     try:
         full = _safe(path)
         if not full.exists():
@@ -166,25 +254,51 @@ def list_files(path: str = ".", recursive: bool = False, pattern: str = "*") -> 
         return {"error": str(e)}
 
 
-@mcp.tool()
-def read_file(path: str, limit: int = 2000) -> dict:
-    """Baca isi file teks (maks `limit` baris)."""
+@mcp.tool(annotations=_ann("Baca file", read_only=True, idempotent=True))
+def read_file(path: str, limit: int = 2000, offset: int = 0) -> dict:
+    """Baca file teks (UTF-8) per baris; lanjutkan file besar dari 'next_offset'. Hasil dibatasi karakternya ('truncated'); 'line_ending' melaporkan LF, CRLF, CR, atau mixed."""
     try:
         if limit <= 0:
             return {"error": "limit harus lebih besar dari 0"}
+        if offset < 0:
+            return {"error": "offset tidak boleh negatif"}
         full = _safe(path)
         if not full.exists():
             return {"error": f"File tidak ditemukan: {path}"}
         if full.is_dir():
             return {"error": f"Path adalah direktori, bukan file: {path}"}
+
+        lines: list[str] = []
+        chars = 0
+        total = 0
+        cut_by_chars = False
         with full.open("r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        return {
+            for total, line in enumerate(f, start=1):
+                if total <= offset or len(lines) >= limit:
+                    continue  # tetap iterasi agar total_lines akurat
+                remaining = MAX_READ_CHARS - chars
+                if remaining <= 0:
+                    cut_by_chars = True
+                    continue
+                if len(line) > remaining:
+                    line = line[:remaining]
+                    cut_by_chars = True
+                lines.append(line)
+                chars += len(line)
+            line_ending = _eol_name(f.newlines)
+
+        end = offset + len(lines)
+        result = {
             "path": path,
-            "lines": lines[:limit],
-            "total_lines": len(lines),
-            "truncated": len(lines) > limit,
+            "lines": lines,
+            "offset": offset,
+            "total_lines": total,
+            "truncated": end < total or cut_by_chars,
+            "line_ending": line_ending,
         }
+        if end < total:
+            result["next_offset"] = end
+        return result
     except PathError as e:
         return {"error": str(e)}
     except Exception as e:
@@ -192,13 +306,20 @@ def read_file(path: str, limit: int = 2000) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Tulis file", destructive=True, idempotent=True))
 def write_file(path: str, content: str) -> dict:
-    """Tulis/overwrite isi file sepenuhnya (membuat direktori induk bila perlu)."""
+    """Tulis atau timpa seluruh file (folder induk dibuat bila perlu). Line ending file lama dipertahankan, file baru memakai LF; ada batas ukuran."""
     try:
         full = _safe(path)
+        if full.is_dir():
+            return {"error": f"Path adalah direktori, bukan file: {path}"}
+        data = _convert_eol(content, _detect_eol(full))
+        too_big = _size_error(data)
+        if too_big:
+            return {"error": too_big}
         full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(content, encoding="utf-8")
+        with full.open("w", encoding="utf-8", newline="") as f:
+            f.write(data)
         return {"path": path, "written": len(content), "ok": True}
     except PathError as e:
         return {"error": str(e)}
@@ -207,14 +328,21 @@ def write_file(path: str, content: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Tambah ke file", destructive=False))
 def append_file(path: str, content: str) -> dict:
-    """Tambah isi di akhir file (membuat file/direktori induk bila belum ada)."""
+    """Tambah isi di akhir file (file dan folder induk dibuat bila belum ada). Line ending mengikuti file; ada batas ukuran."""
     try:
         full = _safe(path)
+        if full.is_dir():
+            return {"error": f"Path adalah direktori, bukan file: {path}"}
+        data = _convert_eol(content, _detect_eol(full))
+        existing = full.stat().st_size if full.is_file() else 0
+        too_big = _size_error(data, existing)
+        if too_big:
+            return {"error": too_big}
         full.parent.mkdir(parents=True, exist_ok=True)
-        with full.open("a", encoding="utf-8") as f:
-            f.write(content)
+        with full.open("a", encoding="utf-8", newline="") as f:
+            f.write(data)
         return {"path": path, "appended": len(content), "ok": True}
     except PathError as e:
         return {"error": str(e)}
@@ -223,24 +351,33 @@ def append_file(path: str, content: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Edit file", destructive=True))
 def edit_file(path: str, old_string: str, new_string: str, count: int = -1) -> dict:
-    """Ganti kemunculan old_string -> new_string dalam file.
-
-    Args:
-        count: jumlah maksimum penggantian. -1 (default) berarti semua kemunculan.
-    """
+    """Ganti old_string dengan new_string (count membatasi jumlah, -1 = semua). old_string tidak boleh kosong; CRLF dicocokkan otomatis dan line ending dipertahankan."""
     try:
+        if not old_string:
+            return {"error": "old_string tidak boleh kosong"}
         full = _safe(path)
         if not full.exists():
             return {"error": f"File tidak ditemukan: {path}"}
-        text = full.read_text(encoding="utf-8")
-        if old_string not in text:
+        if full.is_dir():
+            return {"error": f"Path adalah direktori, bukan file: {path}"}
+        with full.open("r", encoding="utf-8", newline="") as f:
+            text = f.read()
+        crlf = text.count("\r\n")
+        eol = "\r\n" if crlf * 2 > text.count("\n") else "\n"
+        old = _convert_eol(old_string, eol)
+        new = _convert_eol(new_string, eol)
+        available = text.count(old)
+        if available == 0:
             return {"path": path, "ok": False, "error": "old_string tidak ditemukan"}
-        available = text.count(old_string)
         replacements = available if count < 0 else min(count, available)
-        text = text.replace(old_string, new_string, replacements)
-        full.write_text(text, encoding="utf-8")
+        text = text.replace(old, new, replacements)
+        too_big = _size_error(text)
+        if too_big:
+            return {"error": too_big}
+        with full.open("w", encoding="utf-8", newline="") as f:
+            f.write(text)
         return {"path": path, "replacements": replacements, "ok": True}
     except PathError as e:
         return {"error": str(e)}
@@ -249,9 +386,9 @@ def edit_file(path: str, old_string: str, new_string: str, count: int = -1) -> d
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Hapus file", destructive=True, idempotent=True))
 def delete_file(path: str) -> dict:
-    """Hapus file (bukan direktori — gunakan delete_dir untuk itu)."""
+    """Hapus file (bukan folder)."""
     try:
         full = _safe(path)
         if not full.exists():
@@ -267,14 +404,9 @@ def delete_file(path: str) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Hapus direktori", destructive=True, idempotent=True))
 def delete_dir(path: str, recursive: bool = False) -> dict:
-    """Hapus direktori.
-
-    Args:
-        recursive: jika False (default), hanya berhasil bila direktori kosong.
-                   Jika True, hapus direktori beserta seluruh isinya.
-    """
+    """Hapus folder. Bawaannya hanya bila kosong; recursive=true menghapus beserta isinya."""
     try:
         full = _safe(path)
         if full == BASE_DIR:
@@ -297,13 +429,9 @@ def delete_dir(path: str, recursive: bool = False) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Pindah/ganti nama", destructive=True))
 def move_file(src: str, dst: str, overwrite: bool = False) -> dict:
-    """Pindah atau ganti nama file/direktori dari src ke dst.
-
-    Args:
-        overwrite: jika True, timpa dst jika sudah ada.
-    """
+    """Pindah atau ganti nama file/folder dari src ke dst; overwrite=true menimpa dst."""
     try:
         full_src = _safe(src)
         full_dst = _safe(dst)
@@ -326,9 +454,9 @@ def move_file(src: str, dst: str, overwrite: bool = False) -> dict:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ann("Buat direktori", idempotent=True))
 def mkdir(path: str) -> dict:
-    """Buat direktori (rekursif, tidak error jika sudah ada)."""
+    """Buat folder (rekursif; tidak error bila sudah ada)."""
     try:
         full = _safe(path)
         full.mkdir(parents=True, exist_ok=True)

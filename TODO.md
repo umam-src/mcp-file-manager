@@ -11,8 +11,13 @@
 
 - [x] `list_files(recursive=True)` exclude direktori berat (`.git`, `.venv`, `node_modules`, dll.) + cap `MAX_RECURSIVE_ENTRIES` agar hasil tidak melebihi batas ukuran tool. Ditemukan langsung saat listing repo nyata (papan-tugas, mcp-file-manager sendiri) — hasil sebelumnya gagal total ("Tool result too large").
 
+- [x] Optimasi untuk Claude Desktop (0.3.0): `instructions` server, annotations tool, `read_file` streaming + `offset` + batas karakter, batas ukuran tulis, pelestarian line ending CRLF/LF.
+
 ## Masih terbuka
 - [ ] Tool `delete_dir` sudah ada — pertimbangkan dry-run/preview sebelum hapus rekursif.
-- [ ] Batas ukuran file untuk `write_file`/`append_file` agar tidak menulis file raksasa tanpa sengaja.
-- [ ] `read_file` memuat seluruh file ke memori (`f.readlines()`) sebelum dipotong ke `limit` — untuk file sangat besar ini boros memori/lambat. Pertimbangkan baca baris secara streaming (mis. `itertools.islice`) supaya berhenti begitu `limit` tercapai.
 - [ ] `DEFAULT_EXCLUDE_DIRS`/`MAX_RECURSIVE_ENTRIES` saat ini hardcoded — pertimbangkan jadikan parameter opsional di `list_files` (mis. `exclude`, `max_entries`) supaya caller bisa override sesuai kebutuhan.
+- [ ] Pertimbangkan tool tambahan yang sering dibutuhkan client: `search_files` (cari teks di banyak file) dan `get_file_info` (ukuran, waktu ubah).
+- [ ] Default `MCP_FILE_BASE` masih `/root` (tidak bermakna di Windows) — pertimbangkan default yang lebih aman, mis. wajib diisi.
+- [x] 0.3.1: hemat token tahap 1 (deskripsi tool dipangkas ke maksimal dua kalimat dan disamakan dengan Go): `tools/list` 5.625 menjadi 4.445 karakter, deskripsi tool 2.145 menjadi 1.004.
+- [ ] Hemat token tahap 2: buang field `title` otomatis FastMCP pada skema parameter (mis. `"title": "Path"` dan `read_fileArguments`) bila bisa tanpa mengubah kontrak. Ukur ulang setelahnya.
+- [ ] `read_file`: dukung membaca ekor file (mis. `offset` negatif) agar file besar tidak perlu dibaca dari awal. Kontrak harus sama dengan Go.
