@@ -5,35 +5,58 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-10
+
+Tool mengikuti nama dan parameter Desktop Commander (khusus file); kontrak identik dengan Go 0.2.0.
+
+### Added
+- `read_multiple_files`: baca sampai 20 file sekali panggil; batas karakter dibagi antar file dan file yang gagal memuat `error` tanpa menggagalkan yang lain.
+- `get_file_info`: tipe, ukuran, waktu ubah (UTC), dan jumlah baris untuk file teks.
+- `start_search`: cari nama file/folder (teks biasa atau wildcard `*` `?`) atau teks di dalam file (`searchType=content`), dibatasi `maxResults` (`truncated`).
+- `read_file`: `offset` negatif membaca ekor file.
+- `write_file`: parameter `mode` (`rewrite` bawaan atau `append`).
+
+### Changed
+- **BREAKING:** `list_files` diganti `list_directory(path, depth)`; hasilnya daftar `[DIR] nama` dan `[FILE] nama` (path relatif dengan `/`), folder berat dicantumkan tetapi tidak dimasuki, dan `truncated` hanya muncul bila hasil terpotong.
+- **BREAKING:** `edit_file(path, old_string, new_string, count)` diganti `edit_block(file_path, old_string, new_string, expected_replacements)`. Perubahan dibatalkan dengan `error` bila jumlah kemunculan berbeda dari `expected_replacements` (bawaan 1).
+- **BREAKING:** `read_file` memakai `length` (sebelumnya `limit`); `move_file` memakai `source` dan `destination` (sebelumnya `src` dan `dst`); `mkdir` diganti `create_directory`.
+- **BREAKING:** Hasil lebih ringkas: `write_file` hanya `path` dan `written`, `move_file` hanya `destination` dan `moved`, tanpa field `ok`.
+- `tools/list` kini memuat 11 tool.
+- Hasil tool dikirim sebagai satu blok teks JSON ringkas (tanpa indentasi dan tanpa `structuredContent`), isi dan nama field tidak berubah; `list_directory` 510 → 403 karakter dan `get_file_info` 114 → 93 karakter pada contoh uji.
+- Dependensi minimum `mcp` naik ke 1.10.0 (parameter `structured_output`).
+- CI: workflow Docker dihapus (proyek ini tidak memakai Docker) dan `release.yml` hanya membuat GitHub Release dari `CHANGELOG.md`.
+
+### Removed
+- **BREAKING:** `append_file` (pakai `write_file` dengan `mode` `append`).
+
 ## [0.3.1] - 2026-10-10
 
 ### Changed
-- Hemat token: `tools/list` turun dari 5.625 menjadi 4.445 karakter. Deskripsi tool dipangkas dari 2.145 menjadi 1.004 karakter (maksimal dua kalimat per tool) dan disamakan dengan versi Go. Kontrak tool dan bentuk hasil tidak berubah.
+- Hemat token: `tools/list` turun dari 5.625 menjadi 4.445 karakter. Deskripsi tool dipangkas menjadi maksimal dua kalimat dan disamakan dengan versi Go. Kontrak tool dan bentuk hasil tidak berubah.
 
 ## [0.3.0] - 2026-10-09
 
 Optimasi untuk pemakaian di Claude Desktop (Windows).
 
 ### Added
-- `instructions` server (memuat `BASE_DIR` dan cara pakai tool) dan annotations pada semua tool (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, `title`), agar Claude Desktop membedakan tool baca saja dari tool yang menimpa, menghapus, atau memindah.
-- `read_file(path, limit, offset)`: parameter `offset` (0-based) untuk membaca file besar bertahap. Hasil menambah `offset`, `next_offset` (bila masih ada baris), dan `line_ending` (`LF`, `CRLF`, `CR`, `mixed`).
-- Batas hasil `read_file` (`MAX_READ_CHARS`, 100.000 karakter) dan batas tulis `MAX_WRITE_BYTES` (default 5 MiB, env `MCP_FILE_MAX_WRITE_BYTES`) untuk `write_file`, `append_file`, dan `edit_file`.
+- `instructions` server (memuat `BASE_DIR` dan cara pakai tool) dan annotations pada semua tool (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, `title`).
+- `read_file`: parameter `offset` (0-based) untuk membaca file besar bertahap; hasil menambah `offset`, `next_offset`, dan `line_ending` (`LF`, `CRLF`, `CR`, `mixed`).
+- Batas hasil `read_file` (100.000 karakter) dan batas tulis (default 5 MiB, env `MCP_FILE_MAX_WRITE_BYTES`).
 
 ### Changed
-- `read_file` membaca streaming (tidak memuat seluruh file ke memori); `total_lines` tetap akurat.
-- `write_file`/`append_file`/`edit_file` mempertahankan line ending file yang ada. File baru ditulis dengan LF (sebelumnya di Windows menjadi CRLF); yang butuh CRLF pada file baru perlu menulis `\r\n` sendiri.
-- `edit_file` menolak `old_string` kosong.
-- Dependensi minimum `mcp` menjadi `>=1.8.0` (annotations tool).
+- `read_file` membaca streaming; `total_lines` tetap akurat.
+- Penulisan dan pengeditan mempertahankan line ending file yang ada. File baru ditulis dengan LF (sebelumnya di Windows menjadi CRLF).
+- `old_string` kosong ditolak. Dependensi minimum `mcp` menjadi `>=1.8.0`.
 
 ### Fixed
-- Di Windows, `write_file`/`append_file`/`edit_file` mengubah semua `\n` menjadi CRLF, sehingga mengedit file LF (mis. repo Git) menimbulkan diff besar. Line ending kini dipertahankan.
-- `edit_file` pada file CRLF kini mencocokkan `old_string` multibaris yang ditulis dengan `\n`.
-- `write_file`/`append_file`/`edit_file` pada path direktori mengembalikan pesan error yang jelas.
+- Di Windows, menulis atau mengedit file LF mengubah semua baris menjadi CRLF dan menimbulkan diff besar; kini line ending dipertahankan.
+- Edit pada file CRLF kini mencocokkan `old_string` multibaris yang ditulis dengan `\n`.
+- Menulis atau mengedit path direktori mengembalikan pesan error yang jelas.
 
 ## [0.2.1] - 2026-10-09
 
 ### Fixed
-- `list_files(recursive=True)` bisa menghasilkan output melebihi batas ukuran hasil tool pada direktori berisi `.git`, `.venv`, `node_modules`, dll., sehingga tool gagal total. Direktori berat kini dilewati (`DEFAULT_EXCLUDE_DIRS`, termasuk entri direktorinya sendiri) dan hasil dibatasi maks 1000 entri (`MAX_RECURSIVE_ENTRIES`), dengan field baru `excluded_dirs` dan `truncated`.
+- Listing rekursif pada folder berisi `.git`, `.venv`, `node_modules`, dll. menghasilkan output terlalu besar sehingga tool gagal total. Direktori berat kini dilewati dan hasil dibatasi 1000 entri (`truncated`).
 
 ### Added
 - CI `tests.yml` (GitHub Actions): `pytest` otomatis di setiap push/PR pada Python 3.10 sampai 3.12.
@@ -41,17 +64,15 @@ Optimasi untuk pemakaian di Claude Desktop (Windows).
 ## [0.2.0] - 2026-08-07
 
 ### Fixed
-- Import `FastMCP` diperbaiki (`from mcp.server.fastmcp import FastMCP`); sebelumnya memakai kelas yang tidak ada di SDK resmi sehingga server tidak bisa berjalan.
-- `_safe()` memakai `pathlib.Path.resolve()` sehingga traversal `..`, symlink escape, dan perbedaan separator Windows/Linux tertangani konsisten.
+- Import `FastMCP` diperbaiki (`from mcp.server.fastmcp import FastMCP`); sebelumnya server tidak bisa berjalan.
+- `_safe()` memakai `pathlib.Path.resolve()` sehingga traversal `..`, symlink keluar, dan perbedaan separator Windows/Linux tertangani konsisten.
 
 ### Added
-- Tool `move_file(src, dst, overwrite)` dan `delete_dir(path, recursive)` (tidak bisa menghapus `BASE_DIR`).
-- `list_files`: parameter `recursive` dan `pattern` (glob). `edit_file`: parameter `count`.
+- Tool `move_file` dan `delete_dir` (tidak bisa menghapus `BASE_DIR`); listing rekursif dengan filter pola; parameter `count` pada edit.
 - Validasi path: null byte dan path kosong ditolak.
-- Dukungan `.env` opsional (`python-dotenv`, `pip install -e ".[dotenv]"`), logging ke stderr, unit test `pytest`, dan entry point `mcp-file-manager = "server:main"`.
+- Dukungan `.env` opsional (`python-dotenv`), logging ke stderr, unit test `pytest`, dan entry point `mcp-file-manager = "server:main"`.
 
 ## [0.1.0]
 
 ### Added
-- Inisialisasi project `mcp-file-manager`: tool `list_files`, `read_file`, `write_file`, `append_file`, `edit_file`, `delete_file`, dan `mkdir`.
-- Akses dibatasi ke `BASE_DIR` (env `MCP_FILE_BASE`, default `/root`), README, dan `.env.example`.
+- Inisialisasi project `mcp-file-manager`: tool baca, tulis, tambah, edit, hapus file, daftar isi folder, dan buat folder. Akses dibatasi ke `BASE_DIR` (env `MCP_FILE_BASE`), dengan README dan `.env.example`.

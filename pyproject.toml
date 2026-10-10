@@ -4,7 +4,7 @@ version = "0.3.1"
 description = "MCP server untuk mengelola file lokal (read/write/list/edit/move) di server Hermes"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.8.0",
+    "mcp>=1.10.0",
 ]
 
 [project.optional-dependencies]
