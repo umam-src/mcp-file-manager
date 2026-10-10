@@ -48,40 +48,31 @@ Tool mengikuti nama dan parameter Desktop Commander (khusus file); kontrak ident
 Optimasi untuk pemakaian di Claude Desktop (Windows).
 
 ### Added
-- `instructions` server (memuat `BASE_DIR` dan cara pakai tool) dan annotations pada semua tool (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, `title`).
-- `read_file`: parameter `offset` (0-based) untuk membaca file besar bertahap; hasil menambah `offset`, `next_offset`, dan `line_ending` (`LF`, `CRLF`, `CR`, `mixed`).
-- Batas hasil `read_file` (100.000 karakter) dan batas tulis (default 5 MiB, env `MCP_FILE_MAX_WRITE_BYTES`).
+- `instructions` server dan annotations pada semua tool; `read_file` dengan `offset` dan `line_ending`; batas hasil baca (100.000 karakter) dan batas tulis (5 MiB, env `MCP_FILE_MAX_WRITE_BYTES`).
 
 ### Changed
-- `read_file` membaca streaming; `total_lines` tetap akurat.
-- Penulisan dan pengeditan mempertahankan line ending file yang ada. File baru ditulis dengan LF (sebelumnya di Windows menjadi CRLF).
-- `old_string` kosong ditolak. Dependensi minimum `mcp` menjadi `>=1.8.0`.
+- Baca streaming; line ending file lama dipertahankan, file baru memakai LF; `old_string` kosong ditolak.
 
 ### Fixed
-- Di Windows, menulis atau mengedit file LF mengubah semua baris menjadi CRLF dan menimbulkan diff besar; kini line ending dipertahankan.
-- Edit pada file CRLF kini mencocokkan `old_string` multibaris yang ditulis dengan `\n`.
-- Menulis atau mengedit path direktori mengembalikan pesan error yang jelas.
+- Di Windows, menulis atau mengedit file LF tidak lagi mengubah semua baris menjadi CRLF; edit multibaris pada file CRLF kini cocok.
 
 ## [0.2.1] - 2026-10-09
 
 ### Fixed
-- Listing rekursif pada folder berisi `.git`, `.venv`, `node_modules`, dll. menghasilkan output terlalu besar sehingga tool gagal total. Direktori berat kini dilewati dan hasil dibatasi 1000 entri (`truncated`).
+- Listing rekursif pada folder berat (`.git`, `.venv`, `node_modules`) tidak lagi menghasilkan output raksasa: folder berat dilewati dan hasil dibatasi 1000 entri.
 
 ### Added
-- CI `tests.yml` (GitHub Actions): `pytest` otomatis di setiap push/PR pada Python 3.10 sampai 3.12.
+- CI `tests.yml`: `pytest` di setiap push dan PR (Python 3.10 sampai 3.12).
 
 ## [0.2.0] - 2026-08-07
 
 ### Fixed
-- Import `FastMCP` diperbaiki (`from mcp.server.fastmcp import FastMCP`); sebelumnya server tidak bisa berjalan.
-- `_safe()` memakai `pathlib.Path.resolve()` sehingga traversal `..`, symlink keluar, dan perbedaan separator Windows/Linux tertangani konsisten.
+- Import `FastMCP` diperbaiki; `_safe()` memakai `Path.resolve()` (traversal, symlink keluar, dan separator Windows/Linux).
 
 ### Added
-- Tool `move_file` dan `delete_dir` (tidak bisa menghapus `BASE_DIR`); listing rekursif dengan filter pola; parameter `count` pada edit.
-- Validasi path: null byte dan path kosong ditolak.
-- Dukungan `.env` opsional (`python-dotenv`), logging ke stderr, unit test `pytest`, dan entry point `mcp-file-manager = "server:main"`.
+- `move_file`, `delete_dir`, validasi path, `.env` opsional, logging ke stderr, unit test, dan entry point.
 
 ## [0.1.0]
 
 ### Added
-- Inisialisasi project `mcp-file-manager`: tool baca, tulis, tambah, edit, hapus file, daftar isi folder, dan buat folder. Akses dibatasi ke `BASE_DIR` (env `MCP_FILE_BASE`), dengan README dan `.env.example`.
+- Inisialisasi: tool dasar baca, tulis, edit, hapus, dan daftar isi; akses dibatasi ke `BASE_DIR`.

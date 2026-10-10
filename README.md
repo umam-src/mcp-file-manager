@@ -3,29 +3,31 @@
 MCP server untuk mengelola file lokal (list/read/write/edit/move/delete).
 
 ## Tools
-- `list_files(path=".", recursive=False, pattern="*")` — daftar isi direktori, opsional rekursif & filter glob (direktori berat seperti `.git`, `.venv`, `node_modules` dilewati; maks 1000 entri)
-- `read_file(path, limit=2000, offset=0)` — baca file teks per baris; lanjutkan file besar dari `next_offset`. Hasil: `lines`, `offset`, `total_lines`, `truncated`, `line_ending`
-- `write_file(path, content)` — tulis/overwrite file (membuat folder induk bila perlu)
-- `append_file(path, content)` — tambah isi di akhir file
-- `edit_file(path, old_string, new_string, count=-1)` — ganti teks dalam file (count=-1 artinya semua kemunculan; `old_string` tidak boleh kosong)
-- `delete_file(path)` — hapus file
-- `delete_dir(path, recursive=False)` — hapus direktori (recursive=True untuk hapus beserta isinya)
-- `move_file(src, dst, overwrite=False)` — pindah/ganti nama file atau direktori
-- `mkdir(path)` — buat direktori rekursif
+- `list_directory(path=".", depth=2)` - daftar isi folder sampai kedalaman tertentu (folder berat seperti `.git`, `.venv`, `node_modules` dicantumkan tetapi tidak dimasuki; maks 1000 entri)
+- `read_file(path, offset=0, length=2000)` - baca file teks per baris; `offset` negatif membaca ekor file; lanjutkan file besar dari `next_offset`. Hasil: `lines`, `offset`, `total_lines`, `truncated`, `line_ending`
+- `read_multiple_files(paths)` - baca sampai 20 file sekali panggil
+- `write_file(path, content, mode="rewrite")` - tulis ulang (`rewrite`) atau tambah di akhir (`append`); folder induk dibuat bila perlu
+- `edit_block(file_path, old_string, new_string, expected_replacements=1)` - ganti teks; gagal bila jumlah kemunculan berbeda dari `expected_replacements`
+- `create_directory(path)` - buat folder (rekursif)
+- `move_file(source, destination, overwrite=False)` - pindah atau ganti nama file atau folder
+- `get_file_info(path)` - tipe, ukuran, waktu ubah (UTC), dan jumlah baris
+- `start_search(pattern, path=".", searchType="files", filePattern="", ignoreCase=True, maxResults=100)` - cari nama file/folder (teks biasa atau wildcard `*` `?`) atau teks di dalam file (`searchType="content"`)
+- `delete_file(path)` - hapus file
+- `delete_dir(path, recursive=False)` - hapus folder; pada symlink atau junction hanya tautannya yang dihapus (hasil memuat `link: true`)
 
 ## Keamanan
 Semua akses dibatasi ke `BASE_DIR` (default `/root`, diatur via env `MCP_FILE_BASE`).
 Path di-resolve dengan `pathlib.Path.resolve()` sebelum divalidasi, sehingga:
 - traversal via `..` ditolak,
-- symlink yang mengarah keluar `BASE_DIR` ikut tertangkap,
+- symlink dan junction yang mengarah keluar `BASE_DIR` ditolak, dan tautan tidak ditelusuri oleh `list_directory` maupun `start_search`,
 - separator Windows (`\`) dan Linux (`/`) ditangani konsisten,
 - path yang mengandung null byte ditolak.
 
 ## Perilaku untuk Claude Desktop
 - **Instructions:** server mengirim petunjuk saat inisialisasi (berisi `BASE_DIR` dan cara pakai tool), jadi model tahu batas akses sejak awal.
-- **Annotations:** tiap tool ditandai `readOnlyHint` / `destructiveHint` / `idempotentHint`. `list_files` dan `read_file` read-only; `write_file`, `edit_file`, `delete_file`, `delete_dir`, dan `move_file` ditandai destruktif.
-- **Hasil dibatasi:** `read_file` maks 100.000 karakter per panggilan (`MAX_READ_CHARS`) dan `list_files` rekursif maks 1000 entri, supaya hasil tool tidak melebihi batas ukuran di client.
-- **Batas tulis:** satu operasi `write_file`/`append_file`/`edit_file` maks 5 MiB; ubah dengan env `MCP_FILE_MAX_WRITE_BYTES`.
+- **Annotations:** tiap tool ditandai `readOnlyHint` / `destructiveHint` / `idempotentHint`. `list_directory`, `read_file`, `read_multiple_files`, `get_file_info`, dan `start_search` read-only; `write_file`, `edit_block`, `delete_file`, `delete_dir`, dan `move_file` ditandai destruktif.
+- **Hasil dibatasi:** `read_file` maks 100.000 karakter per panggilan (`MAX_READ_CHARS`) dan `list_directory` dan `start_search` maks 1000 entri, supaya hasil tool tidak melebihi batas ukuran di client.
+- **Batas tulis:** satu operasi `write_file`/`edit_block` maks 5 MiB; ubah dengan env `MCP_FILE_MAX_WRITE_BYTES`.
 - **Line ending dipertahankan:** file yang sudah memakai CRLF tetap CRLF setelah ditulis/diedit, dan file LF tetap LF (tidak diubah menjadi CRLF oleh Windows). File baru ditulis dengan LF. `read_file` selalu mengembalikan `\n` pada `lines` dan melaporkan aslinya di `line_ending`.
 
 ## Instalasi & menjalankan
@@ -81,11 +83,7 @@ Tambahkan ke config MCP client sebagai server stdio:
 ```
 
 ## Testing
-Test unit mencakup: roundtrip baca/tulis, penolakan path traversal (relatif & absolut),
-penolakan null byte, listing rekursif + pola glob + pengecualian direktori berat, pindah/rename file,
-edit file (termasuk kasus tidak ditemukan dan `old_string` kosong), hapus direktori (kosong vs rekursif),
-`read_file` dengan `offset`/`limit`/batas karakter, pelestarian line ending CRLF/LF,
-batas ukuran tulis, serta annotations dan `instructions` server.
+Test unit mencakup: baca dan tulis, penolakan path di luar `BASE_DIR` dan null byte, `list_directory` dan `start_search`, edit dan pindah file, hapus folder, symlink dan junction (termasuk yang keluar `BASE_DIR`), pelestarian line ending CRLF/LF, batas ukuran, serta annotations dan `instructions` server.
 ```bash
 pytest -v
 ```
