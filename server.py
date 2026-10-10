@@ -34,6 +34,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -189,6 +190,80 @@ def _is_within(child: Path, parent: Path) -> bool:
         return False
 
 
+# Awalan nama cadangan sementara tujuan yang akan ditimpa move_file; cadangan
+# dihapus (atau dikembalikan) sebelum tool selesai.
+BACKUP_PREFIX = ".mfm-lama-"
+
+
+def _is_link(path) -> bool:
+    """True bila path sendiri symlink atau junction (tanpa mengikutinya).
+
+    os.readlink membaca symlink dan junction Windows (Python 3.8+) dan gagal
+    pada file atau folder biasa, jadi tidak bergantung pada versi Python
+    (os.path.isjunction baru ada di 3.12).
+    """
+    try:
+        os.readlink(path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _remove_link(path: Path) -> None:
+    """Hapus tautan itu sendiri; isi folder targetnya tidak disentuh."""
+    if os.name == "nt" and path.is_dir():  # junction atau symlink folder
+        os.rmdir(path)
+    else:
+        os.unlink(path)
+
+
+def _safe_leaf(path: str) -> tuple[Path, bool]:
+    """Seperti _safe, tetapi komponen terakhir yang berupa tautan tidak diikuti.
+
+    Hasilnya (path, is_link). Bila komponen terakhir symlink atau junction,
+    path adalah tautan itu sendiri; dipakai delete_file, delete_dir, dan
+    move_file agar yang dihapus atau dipindah adalah tautannya, bukan isi
+    targetnya. Semua penolakan _safe tetap berlaku, termasuk tautan yang
+    mengarah keluar BASE_DIR.
+    """
+    resolved = _safe(path)
+    if resolved == BASE_DIR:
+        return resolved, False
+    raw = path.rstrip("/\\")
+    if raw in (".", "..") or raw.endswith(("/.", "\\.", "/..", "\\..")):
+        return resolved, False  # "tautan/." berarti foldernya sendiri
+    cand = BASE_DIR / path
+    if cand.name in ("", ".", ".."):
+        return resolved, False
+    link = _safe(str(cand.parent)) / cand.name
+    if _is_link(link):
+        return link, True
+    return resolved, False
+
+
+def _case_only_target(src: Path, dst: Path, typed: str) -> Path | None:
+    """Nama tujuan bila rename hanya mengubah huruf besar/kecil pada file yang sama.
+
+    Di Windows _safe menormalkan huruf ke nama di disk, sehingga a.txt ke
+    A.txt tampak sebagai sumber dan tujuan yang sama. Hasilnya path dengan
+    huruf seperti yang diketik pemanggil, atau None. Di sistem yang
+    membedakan huruf (Linux) A.txt bukan file yang sama, jadi fungsi ini tidak
+    aktif dan rename berjalan seperti biasa.
+    """
+    leaf = Path(typed.rstrip("/\\")).name
+    if leaf in ("", ".", "..") or leaf == src.name or leaf.lower() != src.name.lower():
+        return None
+    if _fold(str(src.parent)) != _fold(str(dst.parent)):
+        return None
+    cand = src.parent / leaf
+    try:
+        if os.path.samestat(os.lstat(src), os.lstat(cand)):
+            return cand
+    except OSError:
+        pass
+    return None
+
+
 def _detect_eol(full: Path) -> str:
     """Line ending file yang sudah ada: CRLF bila mayoritas CRLF, selain itu LF.
 
@@ -266,7 +341,7 @@ def _walk(root: Path, max_depth: int):
             name = f"{rel}/{e.name}" if rel else e.name
             try:
                 is_dir = e.is_dir()
-                real_dir = e.is_dir(follow_symlinks=False)
+                real_dir = e.is_dir(follow_symlinks=False) and not _is_link(e.path)
             except OSError:
                 is_dir = real_dir = False
             yield name, is_dir, e
@@ -529,10 +604,17 @@ def create_directory(path: str) -> dict:
 def move_file(source: str, destination: str, overwrite: bool = False) -> dict:
     """Pindah atau ganti nama file/folder dari source ke destination; overwrite=true menimpa destination."""
     try:
-        src = _safe(source)
-        dst = _safe(destination)
-        if not src.exists():
+        src, src_link = _safe_leaf(source)
+        dst, dst_link = _safe_leaf(destination)
+        if not src_link and not src.exists():  # tautan rusak tetap bisa dipindah
             return {"error": f"Sumber tidak ditemukan: {source}"}
+        # Ganti huruf besar/kecil nama pada file yang sama (Windows: a.txt ke
+        # A.txt): _safe menormalkan huruf ke nama di disk sehingga sumber dan
+        # tujuan tampak sama; rename dilakukan ke nama yang diketik.
+        cased = _case_only_target(src, dst, destination)
+        if cased is not None:
+            os.rename(src, cased)
+            return {"destination": destination, "moved": True}
         # Penjaga: tanpa ini overwrite=true bisa menghapus sumber sendiri bila
         # tujuan sama dengan, berada di dalam, atau induk dari sumber.
         if dst == src:
@@ -542,15 +624,41 @@ def move_file(source: str, destination: str, overwrite: bool = False) -> dict:
         if _is_within(src, dst):
             return {"error": ("Tujuan adalah folder induk dari sumber, memindahkannya "
                               f"akan menghapus sumber: {destination}")}
-        if dst.exists():
+        backup = None
+        dst_is_dir = dst.is_dir()
+        if dst_link or dst.exists():
             if not overwrite:
                 return {"error": f"Tujuan sudah ada: {destination} (gunakan overwrite=True untuk menimpa)"}
-            if dst.is_dir():
-                shutil.rmtree(dst)
-            else:
-                dst.unlink()
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dst))
+            # Tujuan yang akan ditimpa dipindah dulu ke cadangan sementara dan
+            # baru dihapus setelah pemindahan berhasil; bila gagal, cadangan
+            # dikembalikan sehingga tujuan tidak hilang.
+            backup = dst.with_name(f"{BACKUP_PREFIX}{time.time_ns():x}")
+            os.rename(dst, backup)
+
+        def restore() -> None:
+            if backup is None:
+                return
+            try:
+                os.rename(backup, dst)
+            except OSError:
+                logger.error("gagal mengembalikan tujuan dari cadangan %s", backup)
+
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+        except BaseException:
+            restore()
+            raise
+        if backup is not None:
+            try:
+                if dst_link:  # tautan cukup dilepas, isi targetnya jangan dihapus
+                    _remove_link(backup)
+                elif dst_is_dir:
+                    shutil.rmtree(backup)
+                else:
+                    os.unlink(backup)
+            except OSError:
+                logger.error("move berhasil, tetapi cadangan %s gagal dihapus", backup)
         return {"destination": destination, "moved": True}
     except PathError as e:
         return {"error": str(e)}
@@ -628,6 +736,12 @@ def start_search(pattern: str, path: str = ".", searchType: str = "files",
                 continue
             if filePattern and not _name_matches(filePattern, entry.name, ignoreCase):
                 continue
+            if entry.is_symlink():
+                # Tautan file dibaca hanya bila targetnya masih di dalam BASE_DIR.
+                try:
+                    _safe(entry.path)
+                except PathError:
+                    continue
             try:
                 if entry.stat().st_size > MAX_SEARCH_FILE_BYTES:
                     continue
@@ -662,8 +776,8 @@ def start_search(pattern: str, path: str = ".", searchType: str = "files",
 def delete_file(path: str) -> dict:
     """Hapus file (bukan folder)."""
     try:
-        full = _safe(path)
-        if not full.exists():
+        full, is_link = _safe_leaf(path)
+        if not is_link and not full.exists():  # tautan rusak tetap bisa dihapus
             return {"error": f"File tidak ditemukan: {path}"}
         if full.is_dir():
             return {"error": "path adalah direktori, gunakan tool delete_dir"}
@@ -680,13 +794,17 @@ def delete_file(path: str) -> dict:
 def delete_dir(path: str, recursive: bool = False) -> dict:
     """Hapus folder. Bawaannya hanya bila kosong; recursive=true menghapus beserta isinya."""
     try:
-        full = _safe(path)
+        full, is_link = _safe_leaf(path)
         if full == BASE_DIR:
             return {"error": "tidak boleh menghapus BASE_DIR itu sendiri"}
         if not full.exists():
             return {"error": f"Direktori tidak ditemukan: {path}"}
         if not full.is_dir():
             return {"error": "path bukan direktori, gunakan tool delete_file"}
+        if is_link:
+            # Hanya tautannya yang dihapus; isi folder targetnya tidak disentuh.
+            _remove_link(full)
+            return {"path": path, "deleted": True, "link": True}
         if recursive:
             shutil.rmtree(full)
         else:

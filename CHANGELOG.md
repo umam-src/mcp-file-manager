@@ -22,12 +22,21 @@ Tool mengikuti nama dan parameter Desktop Commander (khusus file); kontrak ident
 - **BREAKING:** `read_file` memakai `length` (sebelumnya `limit`); `move_file` memakai `source` dan `destination` (sebelumnya `src` dan `dst`); `mkdir` diganti `create_directory`.
 - **BREAKING:** Hasil lebih ringkas: `write_file` hanya `path` dan `written`, `move_file` hanya `destination` dan `moved`, tanpa field `ok`.
 - `tools/list` kini memuat 11 tool.
-- Hasil tool dikirim sebagai satu blok teks JSON ringkas (tanpa indentasi dan tanpa `structuredContent`), isi dan nama field tidak berubah; `list_directory` 510 → 403 karakter dan `get_file_info` 114 → 93 karakter pada contoh uji.
+- Hasil tool dikirim sebagai satu blok teks JSON ringkas (tanpa indentasi dan tanpa `structuredContent`), isi dan nama field tidak berubah; `list_directory` 510 menjadi 403 karakter dan `get_file_info` 114 menjadi 93 karakter pada contoh uji.
 - Dependensi minimum `mcp` naik ke 1.10.0 (parameter `structured_output`).
 - CI: workflow Docker dihapus (proyek ini tidak memakai Docker) dan `release.yml` hanya membuat GitHub Release dari `CHANGELOG.md`.
 
 ### Removed
 - **BREAKING:** `append_file` (pakai `write_file` dengan `mode` `append`).
+
+### Fixed
+- `delete_file`, `delete_dir`, dan `move_file` bekerja pada tautan (symlink atau junction) itu sendiri, bukan targetnya. `delete_dir` pada tautan hanya melepas tautan dan hasilnya memuat `link: true`; sebelumnya isi target ikut terhapus.
+- `move_file` dengan `overwrite=true`: tujuan dipindah ke cadangan sementara (`.mfm-lama-*`) dan baru dihapus setelah pemindahan berhasil; bila gagal, tujuan dikembalikan. Sebelumnya tujuan dihapus lebih dulu.
+- `move_file`: mengganti huruf besar/kecil nama file (mis. `a.txt` menjadi `A.txt`) kini diizinkan di Windows.
+- `list_directory` tidak memasuki tautan folder.
+
+### Security
+- `start_search` (`searchType=content`) tidak lagi membaca symlink atau junction yang keluar dari `BASE_DIR`.
 
 ## [0.3.1] - 2026-10-10
 
