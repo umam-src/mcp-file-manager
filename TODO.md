@@ -14,7 +14,7 @@
 - [x] Optimasi untuk Claude Desktop (0.3.0): `instructions` server, annotations tool, `read_file` streaming + `offset` + batas karakter, batas ukuran tulis, pelestarian line ending CRLF/LF.
 
 ## Masih terbuka
-- [ ] Tool `delete_dir` sudah ada — pertimbangkan dry-run/preview sebelum hapus rekursif.
+- [x] `delete_dir`: parameter `dry_run` (pratinjau hapus rekursif; belum dirilis, lihat `[Unreleased]` di CHANGELOG).
 - [ ] `DEFAULT_EXCLUDE_DIRS`/`MAX_RECURSIVE_ENTRIES` saat ini hardcoded — pertimbangkan jadikan parameter opsional di `list_files` (mis. `exclude`, `max_entries`) supaya caller bisa override sesuai kebutuhan.
 - [ ] Pertimbangkan tool tambahan yang sering dibutuhkan client: `search_files` (cari teks di banyak file) dan `get_file_info` (ukuran, waktu ubah).
 - [ ] Default `MCP_FILE_BASE` masih `/root` (tidak bermakna di Windows) — pertimbangkan default yang lebih aman, mis. wajib diisi.

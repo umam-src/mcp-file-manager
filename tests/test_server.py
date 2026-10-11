@@ -593,3 +593,61 @@ def test_unknown_arguments_are_rejected_without_running(srv):
         blocks = blocks[0]
     assert '"type":"file"' in blocks[0].text
     assert "additionalProperties" not in str([t.inputSchema for t in tools.values()])
+
+
+def test_delete_dir_dry_run_recursive_reports_without_deleting(srv):
+    base = srv.BASE_DIR
+    (base / "d" / "sub" / "dalam").mkdir(parents=True)
+    (base / "d" / "a.txt").write_text("abc", encoding="utf-8")
+    (base / "d" / "sub" / "b.txt").write_text("de", encoding="utf-8")
+    (base / "d" / "sub" / "dalam" / "c.txt").write_text("f", encoding="utf-8")
+
+    r = srv.delete_dir("d", recursive=True, dry_run=True)
+    assert "error" not in r, r
+    assert r["dry_run"] is True and r["deleted"] is False and r["recursive"] is True
+    assert (r["files"], r["dirs"], r["bytes"]) == (3, 2, 6)
+    assert r["would_delete"] is True and "truncated" not in r
+    for rel in ("d/a.txt", "d/sub/b.txt", "d/sub/dalam/c.txt"):
+        assert (base / rel).exists(), rel
+
+
+def test_delete_dir_dry_run_non_recursive(srv):
+    base = srv.BASE_DIR
+    (base / "penuh").mkdir()
+    (base / "penuh" / "x.txt").write_text("x", encoding="utf-8")
+    (base / "kosong").mkdir()
+
+    r = srv.delete_dir("penuh", dry_run=True)
+    assert "error" not in r
+    assert (r["dry_run"], r["deleted"], r["empty"], r["would_delete"]) == (True, False, False, False)
+    r = srv.delete_dir("kosong", dry_run=True)
+    assert (r["dry_run"], r["deleted"], r["empty"], r["would_delete"]) == (True, False, True, True)
+    assert (base / "penuh" / "x.txt").exists() and (base / "kosong").is_dir()
+
+
+def test_delete_dir_dry_run_keeps_guards(srv):
+    (srv.BASE_DIR / "f.txt").write_text("x", encoding="utf-8")
+    for path, recursive in ((".", True), ("tidak-ada", False), ("f.txt", False), ("../luar", True)):
+        assert "error" in srv.delete_dir(path, recursive=recursive, dry_run=True), path
+
+
+def test_delete_dir_dry_run_caps_count(srv, monkeypatch):
+    base = srv.BASE_DIR
+    (base / "besar").mkdir()
+    for i in range(9):
+        (base / "besar" / f"f{i}.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(srv, "MAX_DRY_RUN_ENTRIES", 5)
+
+    r = srv.delete_dir("besar", recursive=True, dry_run=True)
+    assert "error" not in r and r["truncated"] is True and r["deleted"] is False
+    assert len(list((base / "besar").iterdir())) == 9
+
+
+def test_delete_dir_dry_run_schema_and_rejects_typo(srv):
+    import asyncio
+
+    tools = {t.name: t for t in asyncio.run(srv.mcp.list_tools())}
+    props = tools["delete_dir"].inputSchema["properties"]
+    assert props["dry_run"] == {"default": False, "type": "boolean"}
+    with pytest.raises(Exception, match="dryrun"):
+        asyncio.run(srv.mcp.call_tool("delete_dir", {"path": "d", "dryrun": True}))

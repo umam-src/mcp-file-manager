@@ -5,6 +5,9 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+### Added
+- `delete_dir`: parameter opsional `dry_run`; pratinjau hapus rekursif tanpa menghapus (`files`, `dirs`, `bytes`, `truncated`; tidak rekursif: `empty`, `would_delete`), kontrak sama dengan Go. `tools/list` 5.192 menjadi 5.291 karakter. Belum diberi nomor versi (G-7, roadmap 0.4.0).
+
 ## [0.4.3] - 2026-10-11
 
 ### Changed

@@ -178,3 +178,17 @@ def test_move_file_case_only_rename(srv, tmp_path):
     (tmp_path / "a.txt").write_text("x", encoding="utf-8")
     assert srv.move_file("a.txt", "A.txt") == {"destination": "A.txt", "moved": True}
     assert os.listdir(tmp_path) == ["A.txt"]
+
+
+def test_delete_dir_dry_run_on_link_reports_only_link(srv, tmp_path):
+    asli = srv.BASE_DIR / "asli"
+    asli.mkdir()
+    (asli / "data.txt").write_text("penting", encoding="utf-8")
+    dir_link(srv.BASE_DIR / "tautan", asli)
+
+    r = srv.delete_dir("tautan", recursive=True, dry_run=True)
+    assert "error" not in r, r
+    assert r["link"] is True and r["deleted"] is False and r["dry_run"] is True
+    assert "files" not in r
+    assert os.path.lexists(srv.BASE_DIR / "tautan")
+    assert (asli / "data.txt").read_text(encoding="utf-8") == "penting"

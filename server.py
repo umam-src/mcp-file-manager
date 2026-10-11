@@ -829,9 +829,53 @@ def delete_file(path: str) -> dict:
         return {"error": str(e)}
 
 
+# Batas entri yang dihitung pada dry_run rekursif; lewat batas, hasil memuat
+# truncated=true dan hitungannya sebagian (sama dengan Go).
+MAX_DRY_RUN_ENTRIES = 100_000
+
+
+def _dry_run_delete_dir(full: Path, path: str, recursive: bool) -> dict:
+    """Laporkan apa yang akan dihapus delete_dir tanpa menghapus apa pun.
+
+    Tidak mengikuti tautan: tautan di dalam pohon dihitung sebagai file dan
+    ukurannya tidak ditambahkan.
+    """
+    try:
+        if not recursive:
+            with os.scandir(full) as it:
+                empty = next(it, None) is None
+            return {"path": path, "dry_run": True, "deleted": False,
+                    "recursive": False, "empty": empty, "would_delete": empty}
+        files = dirs = count = size = 0
+        truncated = False
+        stack = [full]
+        while stack and not truncated:
+            with os.scandir(stack.pop()) as it:
+                for entry in it:
+                    if count >= MAX_DRY_RUN_ENTRIES:
+                        truncated = True
+                        break
+                    count += 1
+                    link = _is_link(entry.path)
+                    if not link and entry.is_dir(follow_symlinks=False):
+                        dirs += 1
+                        stack.append(Path(entry.path))
+                    else:
+                        files += 1
+                        if not link and entry.is_file(follow_symlinks=False):
+                            size += entry.stat(follow_symlinks=False).st_size
+    except OSError as e:
+        return {"error": str(e)}
+    result = {"path": path, "dry_run": True, "deleted": False, "recursive": True,
+              "files": files, "dirs": dirs, "bytes": size, "would_delete": True}
+    if truncated:
+        result["truncated"] = True
+    return result
+
+
 @_tool("Hapus direktori", destructive=True, idempotent=True)
-def delete_dir(path: str, recursive: bool = False) -> dict:
-    """Hapus folder. Bawaannya hanya bila kosong; recursive=true menghapus beserta isinya."""
+def delete_dir(path: str, recursive: bool = False, dry_run: bool = False) -> dict:
+    """Hapus folder. Bawaannya hanya bila kosong; recursive=true menghapus beserta isinya; dry_run=true hanya melaporkan isinya tanpa menghapus."""
     try:
         full, is_link = _safe_leaf(path)
         if full == BASE_DIR:
@@ -841,9 +885,13 @@ def delete_dir(path: str, recursive: bool = False) -> dict:
         if not full.is_dir():
             return {"error": "path bukan direktori, gunakan tool delete_file"}
         if is_link:
+            if dry_run:
+                return {"path": path, "dry_run": True, "deleted": False, "link": True}
             # Hanya tautannya yang dihapus; isi folder targetnya tidak disentuh.
             _remove_link(full)
             return {"path": path, "deleted": True, "link": True}
+        if dry_run:
+            return _dry_run_delete_dir(full, path, recursive)
         if recursive:
             shutil.rmtree(full)
         else:
