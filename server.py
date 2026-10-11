@@ -130,6 +130,18 @@ def _ann(title: str, *, read_only: bool = False, destructive: bool = False,
     )
 
 
+def _strip_titles(node) -> None:
+    """Buang field "title" (string) dari skema JSON, langsung pada objeknya."""
+    if isinstance(node, dict):
+        if isinstance(node.get("title"), str):
+            del node["title"]
+        for value in node.values():
+            _strip_titles(value)
+    elif isinstance(node, list):
+        for value in node:
+            _strip_titles(value)
+
+
 def _tool(title: str, **hints):
     """Daftarkan fungsi sebagai tool MCP dengan hasil JSON ringkas.
 
@@ -137,6 +149,10 @@ def _tool(title: str, **hints):
     sebagai satu blok teks JSON ringkas (tanpa spasi indentasi dan tanpa
     structuredContent), isinya sama. Fungsi aslinya tetap mengembalikan dict
     sehingga dapat dipanggil langsung (mis. dari test).
+
+    Skema input juga dirampingkan: "title" otomatis FastMCP (nama tool dan
+    tiap parameter) dibuang karena hanya menambah token di tools/list.
+    Nama tampilan tool tetap ada di annotations.
     """
     def deco(fn):
         @functools.wraps(fn)
@@ -145,6 +161,12 @@ def _tool(title: str, **hints):
                               separators=(",", ":"))
 
         mcp.tool(annotations=_ann(title, **hints), structured_output=False)(wrapper)
+        try:
+            _strip_titles(mcp._tool_manager.get_tool(fn.__name__).parameters)
+        except AttributeError:
+            # API internal SDK berubah: skema dibiarkan apa adanya (hanya lebih
+            # panjang); test_input_schemas_have_no_title_fields akan memberi tahu.
+            pass
         return fn
 
     return deco

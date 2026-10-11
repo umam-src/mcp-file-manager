@@ -5,6 +5,11 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-11
+
+### Changed
+- Hemat token tahap 2: field `title` otomatis FastMCP (`"title": "Path"`, `read_fileArguments`, dan sejenisnya) dibuang dari skema input di `tools/list`; `tools/list` turun dari 6.074 menjadi 5.226 karakter (38 field `title` menjadi 0). Nama parameter, tipe, nilai bawaan, `required`, dan hasil tool tidak berubah; nama tampilan tool tetap ada di annotations.
+
 ## [0.4.0] - 2026-10-10
 
 Tool mengikuti nama dan parameter Desktop Commander (khusus file); kontrak identik dengan Go 0.2.0.

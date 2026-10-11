@@ -520,3 +520,33 @@ def test_tool_result_keeps_unicode(srv):
 def test_instructions_mention_base_dir(srv):
     assert str(srv.BASE_DIR) in srv.INSTRUCTIONS
     assert srv.mcp.instructions == srv.INSTRUCTIONS
+
+
+def test_input_schemas_have_no_title_fields(srv):
+    """Hemat token: FastMCP menambah "title" otomatis (nama tool dan tiap
+    parameter) ke skema input; dibuang, sedangkan kontraknya tetap."""
+    import asyncio
+
+    def titles(node):
+        if isinstance(node, dict):
+            own = sum(1 for k, v in node.items() if k == "title" and isinstance(v, str))
+            return own + sum(titles(v) for v in node.values())
+        if isinstance(node, list):
+            return sum(titles(v) for v in node)
+        return 0
+
+    tools = {t.name: t for t in asyncio.run(srv.mcp.list_tools())}
+    assert sum(titles(t.inputSchema) for t in tools.values()) == 0
+
+    ls = tools["list_directory"].inputSchema
+    assert ls["properties"] == {
+        "path": {"default": ".", "type": "string"},
+        "depth": {"default": 2, "type": "integer"},
+    }
+    assert "required" not in ls
+    ss = tools["start_search"].inputSchema
+    assert ss["required"] == ["pattern"]
+    assert ss["properties"]["ignoreCase"] == {"default": True, "type": "boolean"}
+    assert tools["read_multiple_files"].inputSchema["properties"]["paths"]["items"] == {"type": "string"}
+    # Judul di annotations (dipakai client untuk menampilkan nama tool) tetap ada.
+    assert tools["list_directory"].annotations.title == "Daftar folder"
