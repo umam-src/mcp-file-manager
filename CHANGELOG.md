@@ -5,6 +5,11 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-11
+
+### Fixed
+- Pasang baru gagal: dependensi `mcp` kini dibatasi `<2` karena `mcp` 2.x menghapus `FastMCP` (`mcp.server.fastmcp`) sehingga server tidak dapat diimpor dan workflow `Tests` gagal di GitHub. Kode tidak berubah; migrasi ke `MCPServer` (mcp 2) dicatat di `TODO.md`.
+
 ## [0.4.1] - 2026-10-11
 
 ### Changed

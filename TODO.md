@@ -21,3 +21,5 @@
 - [x] 0.3.1: hemat token tahap 1 (deskripsi tool dipangkas ke maksimal dua kalimat dan disamakan dengan Go): `tools/list` 5.625 menjadi 4.445 karakter, deskripsi tool 2.145 menjadi 1.004.
 - [x] 0.4.1: hemat token tahap 2 (field `title` otomatis FastMCP dibuang dari skema input; kontrak tidak berubah): `tools/list` 6.074 menjadi 5.226 karakter, 38 field `title` menjadi 0.
 - [ ] `read_file`: dukung membaca ekor file (mis. `offset` negatif) agar file besar tidak perlu dibaca dari awal. Kontrak harus sama dengan Go.
+
+- [ ] Migrasi ke `mcp` 2.x: `FastMCP` diganti `mcp.server.mcpserver.MCPServer` dan API lain berubah; saat ini ditahan dengan `mcp<2` (0.4.2). Uji dulu pada cabang terpisah.
