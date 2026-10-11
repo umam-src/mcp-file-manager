@@ -550,3 +550,46 @@ def test_input_schemas_have_no_title_fields(srv):
     assert tools["read_multiple_files"].inputSchema["properties"]["paths"]["items"] == {"type": "string"}
     # Judul di annotations (dipakai client untuk menampilkan nama tool) tetap ada.
     assert tools["list_directory"].annotations.title == "Daftar folder"
+
+def test_unknown_arguments_are_rejected_without_running(srv):
+    """Parameter tak dikenal (salah ketik, mis. "recursve") ditolak di server dan
+    operasi tidak berjalan, setara dengan Go 0.2.7. Skema terkirim tidak berubah."""
+    import asyncio
+
+    base = srv.BASE_DIR
+    (base / "a.txt").write_text("satu\n", encoding="utf-8")
+    (base / "d").mkdir()
+    (base / "d" / "dalam.txt").write_text("isi", encoding="utf-8")
+
+    args = {
+        "list_directory": {"path": "."},
+        "read_file": {"path": "a.txt"},
+        "read_multiple_files": {"paths": ["a.txt"]},
+        "write_file": {"path": "baru.txt", "content": "x"},
+        "edit_block": {"file_path": "a.txt", "old_string": "satu", "new_string": "SATU"},
+        "create_directory": {"path": "dir-baru"},
+        "move_file": {"source": "a.txt", "destination": "b.txt"},
+        "delete_file": {"path": "a.txt"},
+        "delete_dir": {"path": "d", "recursive": True},
+        "get_file_info": {"path": "a.txt"},
+        "start_search": {"pattern": "satu"},
+    }
+    tools = {t.name: t for t in asyncio.run(srv.mcp.list_tools())}
+    assert set(args) == set(tools)
+
+    for name, valid in args.items():
+        with pytest.raises(Exception, match="salah_ketik"):
+            asyncio.run(srv.mcp.call_tool(name, {**valid, "salah_ketik": True}))
+
+    # Tidak ada operasi yang berjalan.
+    assert (base / "a.txt").read_text(encoding="utf-8") == "satu\n"
+    assert (base / "d" / "dalam.txt").exists()
+    for nama in ("baru.txt", "b.txt", "dir-baru"):
+        assert not (base / nama).exists()
+
+    # Panggilan yang benar tetap berjalan, dan skema tidak memuat additionalProperties.
+    blocks = asyncio.run(srv.mcp.call_tool("get_file_info", args["get_file_info"]))
+    if isinstance(blocks, tuple):
+        blocks = blocks[0]
+    assert '"type":"file"' in blocks[0].text
+    assert "additionalProperties" not in str([t.inputSchema for t in tools.values()])

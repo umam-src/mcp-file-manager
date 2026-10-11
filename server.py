@@ -142,6 +142,19 @@ def _strip_titles(node) -> None:
             _strip_titles(value)
 
 
+def _forbid_extra_arguments(tool) -> None:
+    """Tolak parameter tak dikenal (salah ketik) di server, bukan lewat skema.
+
+    Dipanggil setelah skema dirampingkan: skema yang dikirim ke client sudah
+    tersimpan di tool.parameters dan tidak dihitung ulang, jadi
+    "additionalProperties" tidak ikut terkirim (hemat token), sedangkan
+    validasi sisi server tetap menolak kunci yang tidak dikenal.
+    """
+    model = tool.fn_metadata.arg_model
+    model.model_config["extra"] = "forbid"
+    model.model_rebuild(force=True)
+
+
 def _tool(title: str, **hints):
     """Daftarkan fungsi sebagai tool MCP dengan hasil JSON ringkas.
 
@@ -162,10 +175,14 @@ def _tool(title: str, **hints):
 
         mcp.tool(annotations=_ann(title, **hints), structured_output=False)(wrapper)
         try:
-            _strip_titles(mcp._tool_manager.get_tool(fn.__name__).parameters)
+            registered = mcp._tool_manager.get_tool(fn.__name__)
+            _strip_titles(registered.parameters)
+            _forbid_extra_arguments(registered)
         except AttributeError:
             # API internal SDK berubah: skema dibiarkan apa adanya (hanya lebih
-            # panjang); test_input_schemas_have_no_title_fields akan memberi tahu.
+            # panjang) dan parameter tak dikenal tidak ditolak;
+            # test_input_schemas_have_no_title_fields dan
+            # test_unknown_arguments_are_rejected_without_running akan memberi tahu.
             pass
         return fn
 

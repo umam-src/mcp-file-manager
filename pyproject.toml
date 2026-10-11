@@ -1,6 +1,6 @@
 [project]
 name = "mcp-file-manager"
-version = "0.4.2"
+version = "0.4.3"
 description = "MCP server untuk mengelola file lokal (read/write/list/edit/move) di server Hermes"
 requires-python = ">=3.10"
 dependencies = [

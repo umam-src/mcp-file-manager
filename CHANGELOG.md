@@ -5,6 +5,11 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-11
+
+### Changed
+- Parameter tak dikenal (salah ketik, mis. `recursve`) kini ditolak di server dan operasinya tidak berjalan, sama dengan Go 0.2.7. Sebelumnya diabaikan diam-diam sehingga `delete_dir` dengan `recursve` tetap berjalan tanpa `recursive`. Skema di `tools/list` tidak berubah (tanpa `additionalProperties`, 5.192 karakter); penolakan dilakukan oleh validasi argumen sisi server.
+
 ## [0.4.2] - 2026-10-11
 
 ### Fixed
