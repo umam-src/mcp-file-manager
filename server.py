@@ -22,7 +22,8 @@ Jalankan:
   python3 server.py   (stdio MCP)
 
 Environment variable:
-  MCP_FILE_BASE            direktori dasar yang boleh diakses (default /root)
+  MCP_FILE_BASE            direktori dasar yang boleh diakses (default /root);
+                           beberapa folder dipisah ';' (Windows) atau ':' (Linux)
   MCP_FILE_MAX_WRITE_BYTES batas ukuran tulis per operasi (default 5 MiB)
   MCP_FILE_LOG_LEVEL       level log ke stderr (default INFO)
 """
@@ -62,7 +63,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mcp-file-manager")
 
-BASE_DIR = Path(os.environ.get("MCP_FILE_BASE", "/root")).resolve()
+
+def _load_bases(raw: str) -> list[Path]:
+    """Baca MCP_FILE_BASE: satu atau beberapa folder (dipisah os.pathsep).
+
+    Satu folder berjalan seperti biasa (tanpa cek keberadaan). Pada beberapa
+    folder, yang tidak ada atau bukan folder dilewati dengan peringatan selama
+    masih ada satu yang valid; folder yang tumpang tindih ditolak.
+    """
+    entries = [e.strip() for e in raw.split(os.pathsep) if e.strip()]
+    if not entries:
+        raise ValueError("MCP_FILE_BASE belum diisi: isi dengan folder yang boleh diakses")
+    if "\x00" in raw:
+        raise ValueError("MCP_FILE_BASE mengandung null byte")
+    bases: list[Path] = []
+    for entry in entries:
+        real = Path(entry).resolve()
+        if len(entries) > 1 and not real.is_dir():
+            logging.getLogger("mcp-file-manager").warning(
+                "folder dilewati (tidak ada atau bukan folder): %s", entry)
+            continue
+        for b in bases:
+            if real == b or b in real.parents or real in b.parents:
+                raise ValueError(f"folder di MCP_FILE_BASE tumpang tindih: {b} dan {real}")
+        bases.append(real)
+    if not bases:
+        raise ValueError("tidak ada folder yang tersedia di MCP_FILE_BASE")
+    return bases
+
+
+# Semua folder dasar; BASE_DIR (yang pertama) adalah dasar path relatif.
+BASES = _load_bases(os.environ.get("MCP_FILE_BASE", "/root"))
+BASE_DIR = BASES[0]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -99,9 +131,17 @@ MAX_MATCH_CHARS = 200
 
 # Petunjuk untuk model, dikirim client saat inisialisasi (Claude Desktop
 # memasukkannya ke konteks), supaya model tahu batas akses dan cara pakai.
-INSTRUCTIONS = (
-    f"Server file manager lokal. Semua path relatif terhadap BASE_DIR = {BASE_DIR}. "
+_SCOPE = (
+    f"Semua path relatif terhadap BASE_DIR = {BASE_DIR}. "
     "Path absolut di dalam BASE_DIR juga diterima; path di luarnya ditolak. "
+    if len(BASES) == 1 else
+    f"Path relatif terhadap BASE_DIR = {BASE_DIR} (folder pertama). "
+    f"Folder lain: {'; '.join(str(b) for b in BASES[1:])}. "
+    "Path absolut di salah satu folder diterima; path di luar semuanya ditolak. "
+)
+
+INSTRUCTIONS = (
+    "Server file manager lokal. " + _SCOPE +
     "Untuk melihat struktur pakai list_directory(depth); folder berat "
     "(.git, .venv, node_modules, dll.) tidak dimasuki. "
     "Untuk file besar pakai read_file dengan length dan offset (lanjutkan dari "
@@ -214,10 +254,9 @@ def _safe(path: str) -> Path:
     """
     _validate_raw(path)
     candidate = (BASE_DIR / path).resolve()
-    try:
-        candidate.relative_to(BASE_DIR)
-    except ValueError:
-        raise PathError(f"Akses ditolak: '{path}' berada di luar {BASE_DIR}")
+    if not any(_is_within(candidate, b) for b in BASES):
+        where = "; ".join(str(b) for b in BASES)
+        raise PathError(f"Akses ditolak: '{path}' berada di luar {where}")
     return candidate
 
 
@@ -266,7 +305,7 @@ def _safe_leaf(path: str) -> tuple[Path, bool]:
     mengarah keluar BASE_DIR.
     """
     resolved = _safe(path)
-    if resolved == BASE_DIR:
+    if resolved in BASES:
         return resolved, False
     raw = path.rstrip("/\\")
     if raw in (".", "..") or raw.endswith(("/.", "\\.", "/..", "\\..")):
@@ -878,7 +917,7 @@ def delete_dir(path: str, recursive: bool = False, dry_run: bool = False) -> dic
     """Hapus folder. Bawaannya hanya bila kosong; recursive=true menghapus beserta isinya; dry_run=true hanya melaporkan isinya tanpa menghapus."""
     try:
         full, is_link = _safe_leaf(path)
-        if full == BASE_DIR:
+        if full in BASES:
             return {"error": "tidak boleh menghapus BASE_DIR itu sendiri"}
         if not full.exists():
             return {"error": f"Direktori tidak ditemukan: {path}"}
@@ -907,7 +946,7 @@ def delete_dir(path: str, recursive: bool = False, dry_run: bool = False) -> dic
 
 
 def main() -> None:
-    logger.info("mcp-file-manager start, BASE_DIR=%s", BASE_DIR)
+    logger.info("mcp-file-manager start, BASE_DIR=%s, folder_lain=%s", BASE_DIR, [str(b) for b in BASES[1:]])
     mcp.run()
 
 

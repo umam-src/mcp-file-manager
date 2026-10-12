@@ -5,8 +5,14 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
 ### Added
-- `delete_dir`: parameter opsional `dry_run`; pratinjau hapus rekursif tanpa menghapus (`files`, `dirs`, `bytes`, `truncated`; tidak rekursif: `empty`, `would_delete`), kontrak sama dengan Go. `tools/list` 5.192 menjadi 5.291 karakter. Belum diberi nomor versi (G-7, roadmap 0.4.0).
+- `MCP_FILE_BASE` boleh berisi beberapa folder (dipisah `;` di Windows, `:` di Linux), perilaku sama dengan Go 0.3.0. Path relatif dihitung dari folder pertama (`BASE_DIR`); path absolut di salah satu folder diterima; symlink dan junction diperiksa terhadap semua folder. Folder tak tersedia dilewati dengan peringatan selama masih ada satu yang valid; folder bertumpang tindih ditolak saat mulai; `delete_dir` tidak menghapus folder dasar mana pun. Satu folder berjalan seperti sebelumnya: `tools/list` dan `instructions` tidak berubah (diukur identik); `instructions` hanya bertambah bila ada lebih dari satu folder. Folder jarak jauh (UNC, CIFS, NFS) belum diuji.
+- `delete_dir`: parameter opsional `dry_run`; pratinjau hapus rekursif tanpa menghapus (`files`, `dirs`, `bytes`, `truncated`; tidak rekursif: `empty`, `would_delete`), kontrak sama dengan Go. `tools/list` 5.192 menjadi 5.291 karakter. Isu G-7.
+
+### Changed
+- `MCP_FILE_BASE` yang diisi kosong kini ditolak saat mulai (sebelumnya diam-diam memakai folder kerja saat ini). Bila tidak diisi sama sekali, bawaan `/root` tetap berlaku.
 
 ## [0.4.3] - 2026-10-11
 
