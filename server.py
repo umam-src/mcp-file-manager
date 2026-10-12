@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MCP server untuk mengelola file lokal di server Hermes.
+"""MCP server untuk mengelola file lokal.
 
 Nama dan parameter tool mengikuti Desktop Commander (khusus file):
   - list_directory(path, depth)                 -> daftar isi folder
