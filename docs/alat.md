@@ -24,9 +24,31 @@ Annotations: `list_directory`, `read_file`, `read_multiple_files`, `get_file_inf
 
 | Variabel | Bawaan | Keterangan |
 |---|---|---|
-| `MCP_FILE_BASE` | `/root` | Folder yang boleh diakses. Beberapa folder dipisah `;` (Windows) atau `:` (Linux); path relatif dihitung dari folder pertama. Folder yang bertumpang tindih ditolak saat mulai. Folder jarak jauh (UNC atau mount) boleh sebagai path yang dipasang sistem operasi. |
+| `MCP_FILE_CONFIG` | berkas bawaan bila ada | Berkas config JSON (lihat di bawah). Bila kosong dipakai `%APPDATA%\mcp-file-manager\config.json` (Windows) atau `$XDG_CONFIG_HOME`/`~/.config/mcp-file-manager/config.json` (Linux) jika ada. |
+| `MCP_FILE_BASE` | wajib bila tanpa config | Folder yang boleh diakses; menjadi cadangan bila berkas config tidak bisa dipakai (semua `rw`). Beberapa folder dipisah `;` (Windows) atau `:` (Linux); path relatif dihitung dari folder pertama. Folder yang bertumpang tindih ditolak saat mulai. Folder jarak jauh (UNC atau mount) boleh sebagai path yang dipasang sistem operasi. |
 | `MCP_FILE_MAX_WRITE_BYTES` | 5 MiB | Batas ukuran tulis per operasi `write_file`/`edit_block`. |
 | `MCP_FILE_LOG_LEVEL` | `INFO` | Level log ke stderr. |
+
+### Berkas config
+
+Berkas JSON di luar semua folder dasar (ditolak bila berada di dalamnya, agar server tidak bisa mengubah pengaturannya sendiri). Contoh:
+
+```json
+{
+  "bases": [
+    {"path": "C:/Proyek", "mode": "rw"},
+    {"path": "//server/share", "mode": "ro"}
+  ],
+  "max_write_bytes": 5242880,
+  "max_read_chars": 100000,
+  "max_entries": 1000
+}
+```
+
+- `mode`: `rw` atau `ro`; bawaan `ro` (aman). Tulis, hapus, dan pindah dari atau ke folder `ro` ditolak dengan pesan galat.
+- Batas yang dihilangkan memakai bawaan. Field yang tidak dikenal menolak seluruh berkas. Gunakan garis miring (`//server/share`) agar JSON tidak rusak oleh `\`.
+- Dimuat ulang tanpa restart: waktu ubah berkas diperiksa tiap panggilan tool. Berkas rusak atau tidak valid: config valid terakhir tetap dipakai dan peringatan ditulis ke stderr. `instructions` dikirim saat mulai, jadi daftar folder di dalamnya baru berubah setelah restart.
+- Bila berkas tidak bisa dipakai saat mulai, `MCP_FILE_BASE` menjadi cadangan (semua `rw`) dan berkas tetap dipantau.
 
 Dukungan berkas `.env` bersifat opsional (`pip install -e ".[dotenv]"`); tanpa itu pakai pengaturan client MCP.
 

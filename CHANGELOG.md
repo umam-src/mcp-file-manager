@@ -5,6 +5,16 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-13
+
+### Added
+- Config terpusat, kontrak sama dengan Go 0.5.0: berkas JSON lewat `MCP_FILE_CONFIG` (atau berkas bawaan `%APPDATA%\mcp-file-manager\config.json` di Windows, `$XDG_CONFIG_HOME` atau `~/.config` di Linux, bila ada) berisi folder dasar dengan mode `rw`/`ro` (bawaan `ro`) dan batas `max_write_bytes`, `max_read_chars`, `max_entries`. Folder `ro` menolak tulis, hapus, dan pindah. Berkas harus di luar semua folder dasar; field tak dikenal ditolak. Dimuat ulang tanpa restart; berkas rusak: config valid terakhir tetap dipakai dan peringatan ditulis ke stderr. `tools/list` tidak berubah.
+- `MCP_FILE_BASE` tetap berlaku sebagai cadangan bila berkas config tidak ada atau tidak valid (semua folder `rw`).
+
+### Changed
+- Tanpa config dan tanpa `MCP_FILE_BASE`, server kini tidak jalan (sebelumnya bawaan `/root`), sama dengan Go: cakupan akses harus dipilih secara sadar. Yang sudah mengisi `MCP_FILE_BASE` tidak terpengaruh.
+- Satu folder di `MCP_FILE_BASE` yang tidak ada kini ditolak saat mulai (sebelumnya tidak diperiksa), sama dengan Go.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added

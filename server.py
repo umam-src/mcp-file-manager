@@ -14,7 +14,7 @@ Nama dan parameter tool mengikuti Desktop Commander (khusus file):
   - delete_file(path)                           -> hapus file
   - delete_dir(path, recursive)                 -> hapus direktori
 
-Semua akses dibatasi ke BASE_DIR (default /root) untuk keamanan.
+Semua akses dibatasi ke folder dasar (BASE_DIR dan folder lain di config) untuk keamanan.
 Path di-resolve dengan pathlib (menangani symlink & separator Windows/Linux)
 sebelum divalidasi berada di dalam BASE_DIR.
 
@@ -22,7 +22,9 @@ Jalankan:
   python3 server.py   (stdio MCP)
 
 Environment variable:
-  MCP_FILE_BASE            direktori dasar yang boleh diakses (default /root);
+  MCP_FILE_CONFIG          berkas config JSON (folder rw/ro dan batas hasil); bila kosong
+                           dipakai berkas di folder config pengguna jika ada
+  MCP_FILE_BASE            direktori dasar yang boleh diakses (wajib bila tanpa config);
                            beberapa folder dipisah ';' (Windows) atau ':' (Linux)
   MCP_FILE_MAX_WRITE_BYTES batas ukuran tulis per operasi (default 5 MiB)
   MCP_FILE_LOG_LEVEL       level log ke stderr (default INFO)
@@ -64,61 +66,250 @@ logging.basicConfig(
 logger = logging.getLogger("mcp-file-manager")
 
 
-def _load_bases(raw: str) -> list[Path]:
-    """Baca MCP_FILE_BASE: satu atau beberapa folder (dipisah os.pathsep).
+# --------------------------------------------------------------------------
+# Config: folder dasar (rw/ro) dan batas hasil
+# --------------------------------------------------------------------------
+# Urutan: berkas config JSON dari MCP_FILE_CONFIG, atau berkas di lokasi bawaan
+# bila ada; bila berkas tidak bisa dipakai, MCP_FILE_BASE menjadi cadangan.
+# Tanpa keduanya server tidak jalan (tidak ada nilai bawaan). Kontrak sama
+# dengan versi Go 0.5.0.
 
-    Satu folder berjalan seperti biasa (tanpa cek keberadaan). Pada beberapa
-    folder, yang tidak ada atau bukan folder dilewati dengan peringatan selama
-    masih ada satu yang valid; folder yang tumpang tindih ditolak.
-    """
-    entries = [e.strip() for e in raw.split(os.pathsep) if e.strip()]
-    if not entries:
-        raise ValueError("MCP_FILE_BASE belum diisi: isi dengan folder yang boleh diakses")
-    if "\x00" in raw:
-        raise ValueError("MCP_FILE_BASE mengandung null byte")
-    bases: list[Path] = []
-    for entry in entries:
-        real = Path(entry).resolve()
-        if len(entries) > 1 and not real.is_dir():
-            logging.getLogger("mcp-file-manager").warning(
-                "folder dilewati (tidak ada atau bukan folder): %s", entry)
-            continue
-        for b in bases:
-            if real == b or b in real.parents or real in b.parents:
-                raise ValueError(f"folder di MCP_FILE_BASE tumpang tindih: {b} dan {real}")
-        bases.append(real)
-    if not bases:
-        raise ValueError("tidak ada folder yang tersedia di MCP_FILE_BASE")
-    return bases
+ENV_BASE = "MCP_FILE_BASE"
+ENV_CONFIG = "MCP_FILE_CONFIG"
+DEFAULT_MAX_WRITE_BYTES = 5 * 1024 * 1024
+DEFAULT_MAX_READ_CHARS = 100_000
+DEFAULT_MAX_ENTRIES = 1000
+MAX_CONFIG_BYTES = 64 * 1024
+_CONFIG_KEYS = {"bases", "max_write_bytes", "max_read_chars", "max_entries"}
 
 
-# Semua folder dasar; BASE_DIR (yang pertama) adalah dasar path relatif.
-BASES = _load_bases(os.environ.get("MCP_FILE_BASE", "/root"))
-BASE_DIR = BASES[0]
+class ConfigError(ValueError):
+    """Config tidak bisa dipakai."""
 
 
-def _env_int(name: str, default: int) -> int:
+def _within(parent: Path, child: Path) -> bool:
+    return child == parent or parent in child.parents
+
+
+def _env_int(env, name: str, default: int) -> int:
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return default
     try:
-        return int(os.environ.get(name, default))
+        value = int(raw)
+        if value <= 0:
+            raise ValueError
+        return value
     except ValueError:
         logger.warning("%s tidak valid, memakai default %s", name, default)
         return default
 
 
-# Batas karakter isi yang dikembalikan read_file per panggilan, agar hasil
-# tool tidak melebihi batas ukuran di client. read_multiple_files membagi
-# batas yang sama untuk semua file.
-MAX_READ_CHARS = 100_000
+def _resolve_base(raw: str) -> Path:
+    try:
+        real = Path(raw).resolve(strict=True)
+    except FileNotFoundError:
+        raise ConfigError(f"folder {Path(raw).absolute()} tidak ditemukan") from None
+    except (OSError, RuntimeError) as e:
+        raise ConfigError(f"folder {raw} tidak bisa dibaca: {e}") from None
+    if not real.is_dir():
+        raise ConfigError(f"harus menunjuk ke folder, bukan file: {real}")
+    return real
 
-# Batas ukuran (byte) untuk satu operasi write_file/edit_block, agar tidak
-# menulis file raksasa tanpa sengaja.
-MAX_WRITE_BYTES = _env_int("MCP_FILE_MAX_WRITE_BYTES", 5 * 1024 * 1024)
+
+def _pick_bases(specs: list[tuple[str, bool]], label: str) -> list[tuple[Path, bool]]:
+    """Selesaikan folder dasar dan periksa tumpang tindih. Dengan satu entri,
+    kegagalan langsung jadi galat; dengan beberapa entri, folder yang tidak
+    tersedia dilewati (dengan peringatan) selama masih ada satu yang valid."""
+    bases: list[tuple[Path, bool]] = []
+    first_err: ConfigError | None = None
+    for raw, ro in specs:
+        try:
+            real = _resolve_base(raw)
+        except ConfigError as e:
+            if len(specs) == 1:
+                raise ConfigError(f"{label}: {e}") from None
+            logger.warning("folder dilewati: %s (%s)", raw, e)
+            first_err = first_err or e
+            continue
+        for b, _ in bases:
+            if _within(b, real) or _within(real, b):
+                raise ConfigError(f"folder di {label} tumpang tindih: {b} dan {real}")
+        bases.append((real, ro))
+    if not bases:
+        raise ConfigError(f"tidak ada folder yang tersedia di {label}: {first_err}")
+    return bases
+
+
+def _load_env_config(env) -> dict:
+    raw = (env.get(ENV_BASE) or "").strip()
+    if not raw:
+        raise ConfigError(f"{ENV_BASE} belum diisi: isi dengan folder yang boleh diakses server "
+                          "(contoh: C:/Users/nama/Dokumen)")
+    if "\x00" in raw:
+        raise ConfigError(f"{ENV_BASE} mengandung null byte")
+    specs = [(e.strip(), False) for e in raw.split(os.pathsep) if e.strip()]
+    if not specs:
+        raise ConfigError(f"{ENV_BASE} belum diisi: isi dengan folder yang boleh diakses server")
+    return {"bases": _pick_bases(specs, ENV_BASE),
+            "max_write_bytes": _env_int(env, "MCP_FILE_MAX_WRITE_BYTES", DEFAULT_MAX_WRITE_BYTES),
+            "max_read_chars": DEFAULT_MAX_READ_CHARS,
+            "max_entries": DEFAULT_MAX_ENTRIES}
+
+
+def _limit(data: dict, key: str, default: int) -> int:
+    value = data.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f'"{key}" harus bilangan bulat')
+    if value < 0:
+        raise ConfigError("batas tidak boleh negatif")
+    return value or default
+
+
+def _load_file_config(path: Path, env) -> dict:
+    """Baca berkas config JSON. Field tak dikenal ditolak agar salah ketik tidak
+    diam-diam melonggarkan akses, dan berkas ditolak bila berada di dalam salah
+    satu folder dasar (jika tidak, agen bisa melebarkan aksesnya sendiri)."""
+    try:
+        real = path.absolute().resolve(strict=True)
+    except (OSError, RuntimeError) as e:
+        raise ConfigError(f"berkas tidak ditemukan atau tidak terbaca: {e}") from None
+    if not real.is_file():
+        raise ConfigError("harus berupa berkas biasa")
+    if real.stat().st_size > MAX_CONFIG_BYTES:
+        raise ConfigError(f"terlalu besar (maksimal {MAX_CONFIG_BYTES} byte)")
+    try:
+        data = json.loads(real.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise ConfigError(f"JSON tidak valid: {e}") from None
+    if not isinstance(data, dict):
+        raise ConfigError("JSON tidak valid: isi harus berupa objek")
+    unknown = sorted(set(data) - _CONFIG_KEYS)
+    if unknown:
+        raise ConfigError(f"field tidak dikenal: {', '.join(unknown)}")
+    entries = data.get("bases")
+    if not isinstance(entries, list) or not entries:
+        raise ConfigError('"bases" harus berisi minimal satu folder')
+    max_write = _limit(data, "max_write_bytes", _env_int(env, "MCP_FILE_MAX_WRITE_BYTES", DEFAULT_MAX_WRITE_BYTES))
+    max_read = _limit(data, "max_read_chars", DEFAULT_MAX_READ_CHARS)
+    max_entries = _limit(data, "max_entries", DEFAULT_MAX_ENTRIES)
+    specs: list[tuple[str, bool]] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) - {"path", "mode"}:
+            raise ConfigError('setiap entri "bases" harus berupa objek dengan "path" dan "mode"')
+        p = entry.get("path")
+        if not isinstance(p, str) or not p.strip() or "\x00" in p:
+            raise ConfigError('setiap "path" harus diisi dan tanpa null byte')
+        mode = entry.get("mode", "")
+        if mode not in ("", "ro", "rw"):
+            raise ConfigError(f'mode "{mode}" tidak dikenal untuk {p} (pilih "rw" atau "ro")')
+        specs.append((p.strip(), mode != "rw"))
+    bases = _pick_bases(specs, "config")
+    for b, _ in bases:
+        if _within(b, real):
+            raise ConfigError(f"berkas config {real} berada di dalam folder dasar {b}; "
+                              "pindahkan ke luar folder dasar")
+    return {"bases": bases, "max_write_bytes": max_write,
+            "max_read_chars": max_read, "max_entries": max_entries}
+
+
+def _default_config_path(env) -> Path | None:
+    """Lokasi bawaan berkas config di folder config pengguna, sengaja di luar
+    folder kerja agar server tidak bisa mengubahnya sendiri."""
+    if os.name == "nt":
+        base = env.get("APPDATA")
+    elif env.get("XDG_CONFIG_HOME"):
+        base = env.get("XDG_CONFIG_HOME")
+    elif env.get("HOME"):
+        base = str(Path(env["HOME"]) / ".config")
+    else:
+        base = None
+    return Path(base) / "mcp-file-manager" / "config.json" if base else None
+
+
+def _stat_sig(path: Path):
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+# Folder dasar aktif; BASE_DIR (yang pertama) adalah dasar path relatif.
+# Nilainya diganti oleh _apply_config (juga saat config dimuat ulang).
+BASES: list[Path] = []
+BASE_DIR: Path
+RO_BASES: list[Path] = []
+MAX_READ_CHARS = DEFAULT_MAX_READ_CHARS
+MAX_WRITE_BYTES = DEFAULT_MAX_WRITE_BYTES
+MAX_LIST_ENTRIES = DEFAULT_MAX_ENTRIES
+_CFG_PATH: Path | None = None
+_CFG_SIG = None
+
+
+def _apply_config(s: dict) -> None:
+    global BASES, BASE_DIR, RO_BASES, MAX_READ_CHARS, MAX_WRITE_BYTES, MAX_LIST_ENTRIES
+    BASES = [b for b, _ in s["bases"]]
+    BASE_DIR = BASES[0]
+    RO_BASES = [b for b, ro in s["bases"] if ro]
+    MAX_WRITE_BYTES = s["max_write_bytes"]
+    MAX_READ_CHARS = s["max_read_chars"]
+    MAX_LIST_ENTRIES = s["max_entries"]
+
+
+def _init_config(env=os.environ) -> None:
+    global _CFG_PATH, _CFG_SIG
+    raw = (env.get(ENV_CONFIG) or "").strip()
+    path = Path(raw) if raw else None
+    if path is None:
+        default = _default_config_path(env)
+        if default is not None and default.exists():
+            path = default
+    if path is None:
+        _apply_config(_load_env_config(env))
+        return
+    path = path.absolute()
+    sig = _stat_sig(path)
+    try:
+        settings = _load_file_config(path, env)
+    except ConfigError as e:
+        if not (env.get(ENV_BASE) or "").strip():
+            raise ConfigError(f"config {path} tidak bisa dipakai ({ENV_CONFIG}): {e}; "
+                              f"isi {ENV_BASE} sebagai cadangan") from None
+        logger.warning("config tidak bisa dipakai, memakai MCP_FILE_BASE: %s (%s)", path, e)
+        settings = _load_env_config(env)
+    _apply_config(settings)
+    # Tetap dipantau: berkas valid yang muncul belakangan dipakai tanpa restart.
+    _CFG_PATH, _CFG_SIG = path, sig
+
+
+def _refresh_config() -> None:
+    """Muat ulang config bila berkasnya berubah. Berkas rusak atau tidak lolos
+    pemeriksaan: config valid terakhir tetap dipakai dan peringatan ditulis."""
+    global _CFG_SIG
+    if _CFG_PATH is None:
+        return
+    sig = _stat_sig(_CFG_PATH)
+    if sig == _CFG_SIG:
+        return
+    _CFG_SIG = sig
+    try:
+        settings = _load_file_config(_CFG_PATH, os.environ)
+    except ConfigError as e:
+        logger.warning("config tidak valid, memakai config valid terakhir: %s (%s)", _CFG_PATH, e)
+        return
+    _apply_config(settings)
+    logger.info("config dimuat ulang: %s, BASE_DIR=%s, folder_lain=%s, hanya_baca=%s", _CFG_PATH,
+                BASE_DIR, [str(b) for b in BASES[1:]], [str(b) for b in RO_BASES])
+
+
+_init_config()
+
 
 # Jumlah file maksimal untuk read_multiple_files.
 MAX_READ_FILES = 20
 
-# Batas entri list_directory dan hasil start_search.
-MAX_LIST_ENTRIES = 1000
+# Batas hasil start_search (batas entri list_directory ada di config).
 MAX_SEARCH_RESULTS = 1000
 
 # File lebih besar dari ini dilewati pencarian isi; get_file_info tidak
@@ -210,6 +401,7 @@ def _tool(title: str, **hints):
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs) -> str:
+            _refresh_config()
             return json.dumps(fn(*args, **kwargs), ensure_ascii=False,
                               separators=(",", ":"))
 
@@ -268,6 +460,20 @@ def _is_within(child: Path, parent: Path) -> bool:
         return False
 
 
+def _check_writable(full: Path) -> None:
+    """Tolak penulisan di folder dasar bermode ro."""
+    for b in RO_BASES:
+        if _is_within(full, b):
+            raise PathError(f"Folder hanya baca (mode ro di config): {b}")
+
+
+def _safe_w(path: str) -> Path:
+    """Seperti _safe, tetapi juga menolak folder bermode ro."""
+    full = _safe(path)
+    _check_writable(full)
+    return full
+
+
 # Awalan nama cadangan sementara tujuan yang akan ditimpa move_file; cadangan
 # dihapus (atau dikembalikan) sebelum tool selesai.
 BACKUP_PREFIX = ".mfm-lama-"
@@ -317,6 +523,13 @@ def _safe_leaf(path: str) -> tuple[Path, bool]:
     if _is_link(link):
         return link, True
     return resolved, False
+
+
+def _safe_leaf_w(path: str) -> tuple[Path, bool]:
+    """Seperti _safe_leaf, tetapi juga menolak folder bermode ro."""
+    full, is_link = _safe_leaf(path)
+    _check_writable(full)
+    return full, is_link
 
 
 def _case_only_target(src: Path, dst: Path, typed: str) -> Path | None:
@@ -605,7 +818,7 @@ def write_file(path: str, content: str, mode: str = "rewrite") -> dict:
     try:
         if mode not in ("rewrite", "append"):
             return {"error": "mode harus 'rewrite' atau 'append'"}
-        full = _safe(path)
+        full = _safe_w(path)
         if full.is_dir():
             return {"error": f"Path adalah direktori, bukan file: {path}"}
         data = _convert_eol(content, _detect_eol(full))
@@ -633,7 +846,7 @@ def edit_block(file_path: str, old_string: str, new_string: str,
             return {"error": "old_string tidak boleh kosong"}
         if expected_replacements < 1:
             return {"error": "expected_replacements harus lebih besar dari 0"}
-        full = _safe(file_path)
+        full = _safe_w(file_path)
         if not full.exists():
             return {"error": f"File tidak ditemukan: {file_path}"}
         if full.is_dir():
@@ -668,7 +881,7 @@ def edit_block(file_path: str, old_string: str, new_string: str,
 def create_directory(path: str) -> dict:
     """Buat folder (rekursif; tidak error bila sudah ada)."""
     try:
-        full = _safe(path)
+        full = _safe_w(path)
         full.mkdir(parents=True, exist_ok=True)
         return {"path": path, "created": True}
     except PathError as e:
@@ -682,8 +895,8 @@ def create_directory(path: str) -> dict:
 def move_file(source: str, destination: str, overwrite: bool = False) -> dict:
     """Pindah atau ganti nama file/folder dari source ke destination; overwrite=true menimpa destination."""
     try:
-        src, src_link = _safe_leaf(source)
-        dst, dst_link = _safe_leaf(destination)
+        src, src_link = _safe_leaf_w(source)
+        dst, dst_link = _safe_leaf_w(destination)
         if not src_link and not src.exists():  # tautan rusak tetap bisa dipindah
             return {"error": f"Sumber tidak ditemukan: {source}"}
         # Ganti huruf besar/kecil nama pada file yang sama (Windows: a.txt ke
@@ -854,7 +1067,7 @@ def start_search(pattern: str, path: str = ".", searchType: str = "files",
 def delete_file(path: str) -> dict:
     """Hapus file (bukan folder)."""
     try:
-        full, is_link = _safe_leaf(path)
+        full, is_link = _safe_leaf_w(path)
         if not is_link and not full.exists():  # tautan rusak tetap bisa dihapus
             return {"error": f"File tidak ditemukan: {path}"}
         if full.is_dir():
@@ -916,7 +1129,7 @@ def _dry_run_delete_dir(full: Path, path: str, recursive: bool) -> dict:
 def delete_dir(path: str, recursive: bool = False, dry_run: bool = False) -> dict:
     """Hapus folder. Bawaannya hanya bila kosong; recursive=true menghapus beserta isinya; dry_run=true hanya melaporkan isinya tanpa menghapus."""
     try:
-        full, is_link = _safe_leaf(path)
+        full, is_link = _safe_leaf_w(path)
         if full in BASES:
             return {"error": "tidak boleh menghapus BASE_DIR itu sendiri"}
         if not full.exists():
@@ -946,7 +1159,8 @@ def delete_dir(path: str, recursive: bool = False, dry_run: bool = False) -> dic
 
 
 def main() -> None:
-    logger.info("mcp-file-manager start, BASE_DIR=%s, folder_lain=%s", BASE_DIR, [str(b) for b in BASES[1:]])
+    logger.info("mcp-file-manager start, BASE_DIR=%s, folder_lain=%s, hanya_baca=%s, config=%s", BASE_DIR,
+                [str(b) for b in BASES[1:]], [str(b) for b in RO_BASES], _CFG_PATH or "")
     mcp.run()
 
 

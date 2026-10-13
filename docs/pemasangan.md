@@ -12,7 +12,7 @@ Disarankan memakai lingkungan virtual (`.venv`) di folder proyek supaya paket `m
 
 ## 2. Pilih folder yang boleh diakses
 
-Isi `MCP_FILE_BASE` dengan satu atau beberapa folder (dipisah `;` di Windows, `:` di Linux). Makin sempit makin aman. Folder harus sudah ada. Bila kosong, bawaannya `/root` (di Windows isi sendiri).
+Isi `MCP_FILE_BASE` dengan satu atau beberapa folder (dipisah `;` di Windows, `:` di Linux). Makin sempit makin aman. Folder harus sudah ada. Wajib diisi, kecuali memakai berkas config (lihat `docs/alat.md`, bagian Berkas config) yang juga mengatur mode baca-saja per folder.
 
 ## 3. Daftarkan di Claude Desktop (Windows)
 

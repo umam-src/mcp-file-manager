@@ -18,7 +18,8 @@
 - [x] Beberapa folder di `MCP_FILE_BASE` (paritas Go 0.3.0; dirilis di 0.5.0). Sisa: uji folder jarak jauh (UNC, CIFS, NFS).
 - [ ] `DEFAULT_EXCLUDE_DIRS`/`MAX_RECURSIVE_ENTRIES` saat ini hardcoded — pertimbangkan jadikan parameter opsional di `list_files` (mis. `exclude`, `max_entries`) supaya caller bisa override sesuai kebutuhan.
 - [ ] Pertimbangkan tool tambahan yang sering dibutuhkan client: `search_files` (cari teks di banyak file) dan `get_file_info` (ukuran, waktu ubah).
-- [ ] Default `MCP_FILE_BASE` masih `/root` (tidak bermakna di Windows) — pertimbangkan default yang lebih aman, mis. wajib diisi.
+- [x] Default `MCP_FILE_BASE` `/root` dihapus: wajib diisi atau pakai config (0.6.0, paritas Go).
+- [x] Config terpusat (JSON, `MCP_FILE_CONFIG`, mode `rw`/`ro`, muat ulang tanpa restart), paritas Go 0.5.0 (0.6.0).
 - [x] 0.3.1: hemat token tahap 1 (deskripsi tool dipangkas ke maksimal dua kalimat dan disamakan dengan Go): `tools/list` 5.625 menjadi 4.445 karakter, deskripsi tool 2.145 menjadi 1.004.
 - [x] 0.4.1: hemat token tahap 2 (field `title` otomatis FastMCP dibuang dari skema input; kontrak tidak berubah): `tools/list` 6.074 menjadi 5.226 karakter, 38 field `title` menjadi 0.
 - [ ] `read_file`: dukung membaca ekor file (mis. `offset` negatif) agar file besar tidak perlu dibaca dari awal. Kontrak harus sama dengan Go.
