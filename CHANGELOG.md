@@ -5,6 +5,14 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/), versi mengikut
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-13
+
+### Added
+- `list_directory`: parameter opsional `exclude` (daftar nama; persis atau pola `*` `?`, huruf besar/kecil diabaikan di Windows) melewati entri sepenuhnya, tambahan atas folder berat bawaan yang tetap dicantumkan tetapi tidak dimasuki; dan `max_entries`, yang hanya menurunkan batas server (nilai lebih besar dipotong, nilai kurang dari 1 ditolak). Tanpa parameter, hasil tidak berubah. Kontrak sama dengan Go 0.4.0.
+
+### Changed
+- Skema input di `tools/list`: union `null` pada parameter opsional dibuang (parameter opsional cukup tidak dikirim), sama dengan Go. Hanya berlaku untuk parameter baru ini; `tools/list` 5.325 menjadi 5.483 karakter (+158, sama dengan Go 0.4.0; diukur lewat stdio).
+
 ## [0.6.0] - 2026-10-13
 
 ### Added

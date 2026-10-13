@@ -1,6 +1,6 @@
 [project]
 name = "mcp-file-manager"
-version = "0.6.0"
+version = "0.7.0"
 description = "MCP server untuk mengelola file lokal (read/write/list/edit/move)"
 requires-python = ">=3.10"
 dependencies = [

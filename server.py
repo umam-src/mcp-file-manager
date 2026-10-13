@@ -373,6 +373,29 @@ def _strip_titles(node) -> None:
             _strip_titles(value)
 
 
+def _slim_optional(node) -> None:
+    """Ubah union ["null", T] pada parameter opsional (T | None = None) menjadi T.
+
+    Parameter opsional cukup tidak dikirim; "null" dan "default": null hanya
+    menambah token di tools/list. Validasi sisi server tidak berubah (null
+    tetap diterima sebagai "tidak diisi"), sama dengan Go.
+    """
+    if isinstance(node, dict):
+        options = node.get("anyOf")
+        if (isinstance(options, list) and len(options) == 2
+                and sum(1 for o in options if o == {"type": "null"}) == 1):
+            keep = next(o for o in options if o != {"type": "null"})
+            del node["anyOf"]
+            node.update(keep)
+            if node.get("default", 0) is None:
+                del node["default"]
+        for value in node.values():
+            _slim_optional(value)
+    elif isinstance(node, list):
+        for value in node:
+            _slim_optional(value)
+
+
 def _forbid_extra_arguments(tool) -> None:
     """Tolak parameter tak dikenal (salah ketik) di server, bukan lewat skema.
 
@@ -409,6 +432,7 @@ def _tool(title: str, **hints):
         try:
             registered = mcp._tool_manager.get_tool(fn.__name__)
             _strip_titles(registered.parameters)
+            _slim_optional(registered.parameters)
             _forbid_extra_arguments(registered)
         except AttributeError:
             # API internal SDK berubah: skema dibiarkan apa adanya (hanya lebih
@@ -615,12 +639,13 @@ def _is_heavy(name: str) -> bool:
     return name in DEFAULT_EXCLUDE_DIRS or name.endswith(".egg-info")
 
 
-def _walk(root: Path, max_depth: int):
+def _walk(root: Path, max_depth: int, skip=None):
     """Telusuri root secara depth-first dengan urutan nama.
 
     Menghasilkan (path relatif dengan '/', is_dir, DirEntry). Folder berat dan
     symlink ke folder dicantumkan tetapi tidak dimasuki; folder yang tidak
-    terbaca dilewati.
+    terbaca dilewati. Entri yang cocok dengan skip(nama) dilewati sepenuhnya
+    (tidak dicantumkan dan tidak dimasuki).
     """
     def rec(directory: str, rel: str, depth: int):
         try:
@@ -629,6 +654,8 @@ def _walk(root: Path, max_depth: int):
         except OSError:
             return
         for e in entries:
+            if skip is not None and skip(e.name):
+                continue
             name = f"{rel}/{e.name}" if rel else e.name
             try:
                 is_dir = e.is_dir()
@@ -673,6 +700,20 @@ def _name_matches(pattern: str, name: str, ignore_case: bool) -> bool:
     if "*" in pattern or "?" in pattern:
         return _wild(pattern, name)
     return pattern in name
+
+
+def _exclude_func(patterns: list[str] | None):
+    """Penyaring nama dari daftar exclude: nama persis, atau pola dengan '*' / '?'.
+    Huruf besar/kecil diabaikan di Windows."""
+    if not patterns:
+        return None
+    folded = [_fold(p) for p in patterns]
+
+    def skip(name: str) -> bool:
+        n = _fold(name)
+        return any(_wild(p, n) if ("*" in p or "?" in p) else p == n for p in folded)
+
+    return skip
 
 
 def _read_lines(full: Path, offset: int, length: int, max_chars: int) -> dict:
@@ -754,11 +795,17 @@ def _iso(ts: float) -> str:
 # --------------------------------------------------------------------------
 
 @_tool("Daftar folder", read_only=True, idempotent=True)
-def list_directory(path: str = ".", depth: int = 2) -> dict:
-    """Daftar isi folder sampai kedalaman depth, diberi awalan [DIR] atau [FILE]. Folder berat (.git, .venv, node_modules, dll.) tidak dimasuki dan hasil dibatasi 1000 entri ('truncated')."""
+def list_directory(path: str = ".", depth: int = 2, exclude: list[str] | None = None,
+                   max_entries: int | None = None) -> dict:
+    """Daftar isi folder sampai kedalaman depth, diberi awalan [DIR] atau [FILE]; exclude melewati nama (boleh * dan ?). Folder berat (.git, .venv, node_modules, dll.) tidak dimasuki; hasil dibatasi 1000 entri ('truncated'), dapat diturunkan lewat max_entries."""
     try:
         if depth < 1:
             return {"error": "depth harus lebih besar dari 0"}
+        limit = MAX_LIST_ENTRIES
+        if max_entries is not None:
+            if max_entries < 1:
+                return {"error": "max_entries harus lebih besar dari 0"}
+            limit = min(max_entries, limit)
         full = _safe(path)
         if not full.exists():
             return {"error": f"Path tidak ditemukan: {path}"}
@@ -767,8 +814,8 @@ def list_directory(path: str = ".", depth: int = 2) -> dict:
 
         entries: list[str] = []
         truncated = False
-        for name, is_dir, _ in _walk(full, depth):
-            if len(entries) >= MAX_LIST_ENTRIES:
+        for name, is_dir, _ in _walk(full, depth, _exclude_func(exclude)):
+            if len(entries) >= limit:
                 truncated = True
                 break
             entries.append(("[DIR] " if is_dir else "[FILE] ") + name)

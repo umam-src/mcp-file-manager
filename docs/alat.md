@@ -1,12 +1,12 @@
 # Daftar tool dan konfigurasi
 
-Kontrak sama dengan `mcp-file-manager-go`, kecuali `list_directory` di sini belum punya `exclude` dan `max_entries` (Go 0.4.0; Python menyusul). Nama dan parameter tool mengikuti Desktop Commander (khusus file) dan berbahasa Inggris; deskripsi dan pesan error berbahasa Indonesia. Parameter bertanda `*` wajib. Path boleh relatif terhadap folder dasar pertama atau absolut selama hasil akhirnya masih di dalam salah satu folder dasar. Kegagalan dikembalikan sebagai `{"error": "..."}`.
+Kontrak sama dengan `mcp-file-manager-go`. Nama dan parameter tool mengikuti Desktop Commander (khusus file) dan berbahasa Inggris; deskripsi dan pesan error berbahasa Indonesia. Parameter bertanda `*` wajib. Path boleh relatif terhadap folder dasar pertama atau absolut selama hasil akhirnya masih di dalam salah satu folder dasar. Kegagalan dikembalikan sebagai `{"error": "..."}`.
 
 ## Tool
 
 | Tool | Parameter | Keterangan |
 |---|---|---|
-| `list_directory` | `path` (`.`), `depth` (2) | Daftar isi folder sampai kedalaman tertentu. Folder berat (`.git`, `.venv`, `node_modules`, dll.) dicantumkan tetapi tidak dimasuki. Maksimal 1000 entri (`truncated`). Hanya baca. |
+| `list_directory` | `path` (`.`), `depth` (2), `exclude`, `max_entries` | Daftar isi folder sampai kedalaman tertentu. `exclude` (daftar nama; persis atau pola `*` `?`) melewati entri sepenuhnya; `max_entries` menurunkan batas server (nilai lebih besar dipotong, kurang dari 1 ditolak). Folder berat (`.git`, `.venv`, `node_modules`, dll.) dicantumkan tetapi tidak dimasuki. Maksimal 1000 entri (`truncated`). Hanya baca. |
 | `read_file` | `path*`, `offset` (0), `length` (2000) | Baca per baris. `offset` negatif membaca ekor file. Hasil: `lines`, `offset`, `next_offset` (bila masih ada baris), `total_lines`, `line_ending`, `truncated`. Maksimal 100.000 karakter. Hanya baca. |
 | `read_multiple_files` | `paths*` | Baca sampai 20 file sekali panggil. File yang gagal memuat `error` tanpa menggagalkan yang lain. Hanya baca. |
 | `write_file` | `path*`, `content*`, `mode` (`rewrite`) | `rewrite` menulis ulang, `append` menambah di akhir; folder induk dibuat bila perlu. Line ending file lama dipertahankan, file baru memakai LF. |

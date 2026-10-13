@@ -16,7 +16,7 @@
 ## Masih terbuka
 - [x] `delete_dir`: parameter `dry_run` (pratinjau hapus rekursif; dirilis di 0.5.0).
 - [x] Beberapa folder di `MCP_FILE_BASE` (paritas Go 0.3.0; dirilis di 0.5.0). Sisa: uji folder jarak jauh (UNC, CIFS, NFS).
-- [ ] `DEFAULT_EXCLUDE_DIRS`/`MAX_RECURSIVE_ENTRIES` saat ini hardcoded — pertimbangkan jadikan parameter opsional di `list_files` (mis. `exclude`, `max_entries`) supaya caller bisa override sesuai kebutuhan.
+- [x] (0.7.0, paritas Go 0.4.0: `exclude` dan `max_entries`) `DEFAULT_EXCLUDE_DIRS`/`MAX_RECURSIVE_ENTRIES` saat ini hardcoded — pertimbangkan jadikan parameter opsional di `list_files` (mis. `exclude`, `max_entries`) supaya caller bisa override sesuai kebutuhan.
 - [ ] Pertimbangkan tool tambahan yang sering dibutuhkan client: `search_files` (cari teks di banyak file) dan `get_file_info` (ukuran, waktu ubah).
 - [x] Default `MCP_FILE_BASE` `/root` dihapus: wajib diisi atau pakai config (0.6.0, paritas Go).
 - [x] Config terpusat (JSON, `MCP_FILE_CONFIG`, mode `rw`/`ro`, muat ulang tanpa restart), paritas Go 0.5.0 (0.6.0).

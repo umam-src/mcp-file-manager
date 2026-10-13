@@ -542,6 +542,8 @@ def test_input_schemas_have_no_title_fields(srv):
     assert ls["properties"] == {
         "path": {"default": ".", "type": "string"},
         "depth": {"default": 2, "type": "integer"},
+        "exclude": {"items": {"type": "string"}, "type": "array"},
+        "max_entries": {"type": "integer"},
     }
     assert "required" not in ls
     ss = tools["start_search"].inputSchema
